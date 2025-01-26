@@ -276,7 +276,7 @@ class LEDENETDevice:
         return self._discovery
 
     @discovery.setter
-    def discovery(self, value: FluxLEDDiscovery) -> None:
+    def discovery(self, value: FluxLEDDiscovery | None) -> None:
         """Set the discovery data."""
         self._discovery = value
 
