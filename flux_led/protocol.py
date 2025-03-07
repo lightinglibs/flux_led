@@ -91,6 +91,7 @@ PROTOCOL_LEDENET_ADDRESSABLE_A3 = "LEDENET_ADDRESSABLE_A3"
 PROTOCOL_LEDENET_CCT = "LEDENET_CCT"
 PROTOCOL_LEDENET_CCT_WRAPPED = "LEDENET_CCT_WRAPPED"
 PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS = "LEDENET_CHRISTMAS"
+PROTOCOL_LEDENET_25BYTE = "LEDENET_25_BYTE"
 
 TRANSITION_BYTES = {
     TRANSITION_JUMP: 0x3B,
@@ -433,7 +434,7 @@ class ProtocolBase:
         """If the protocol supports zones."""
         return False
 
-    def _increment_counter(self) -> int:
+    def increment_counter(self) -> int:
         """Increment the counter byte."""
         self._counter += 1
         if self._counter == 255:
@@ -748,7 +749,7 @@ class ProtocolBase:
             bytearray(
                 [
                     *OUTER_MESSAGE_WRAPPER,
-                    self._increment_counter(),
+                    self.increment_counter(),
                     inner_msg_len >> 8,
                     inner_msg_len & 0xFF,
                     *inner_msg,
@@ -1379,6 +1380,100 @@ class ProtocolLEDENET9ByteDimmableEffects(ProtocolLEDENET9ByteAutoOn):
         """The bytes to send for a preset pattern."""
         delay = utils.speedToDelay(speed)
         return self.construct_message(bytearray([0x38, pattern, delay, brightness]))
+
+
+class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
+    """25 byte protocol"""
+
+    @property
+    def name(self) -> str:
+        """The name of the protocol."""
+        return PROTOCOL_LEDENET_25BYTE
+
+    @property
+    def timer_len(self) -> int:
+        """Return a single timer len."""
+        return 15
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode,
+    ) -> list[bytearray]:
+        """The bytes to send for a level change request."""
+        # sample message for 25-byte LEDENET protocol (w/ checksum at end)
+        #  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+        # b0 b1 b2 b3 00 01 02 79 00 0e e0 01 00 a1 78 64 64 00 00 00 00 14 00 00
+        #                    |  |              |  |  |  |  |  |  |              |
+        #                    |  |              |  |  |  |  |  |  |              footer
+        #                    |  |              |  |  |  |  |  |  white brightness
+        #                    |  |              |  |  |  |  |  white temperature (00 warm - 64 cool)
+        #                    |  |              |  |  |  |  value
+        #                    |  |              |  |  |  saturation
+        #                    |  |              |  |  hue / 2
+        #                    |  |              |  write mode (a1 color, b1 white)
+        #                    |  |              unknown filler
+        #                    |  increment counter
+        #                    header
+
+
+        if (red is not None and green is not None and blue is not None):
+            h, s, v = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)
+            h = int((h * 360) / 2) # Hue needs to be halved
+            s = int(s * 100)
+            v = int(v * 100)
+        else:
+            h = s = v = 0x00
+        
+        if warm_white is not None:
+            white_temp = 0x00
+            white_brightness = int((warm_white / 255) * 100)
+        elif cool_white is not None:
+            white_temp = 0x64
+            white_brightness = int((cool_white / 255) * 100)
+        else:
+            white_temp = 0x00
+            white_brightness = 0x00
+
+        mode = 0xA1 if write_mode.value == 0xF0 else 0XB1
+
+        return [
+            self.construct_message(
+                bytearray(
+                    [
+                        0xb0,
+                        0xb1,
+                        0xb2,
+                        0xb3,
+                        0x00,
+                        0x01,
+                        0x02,
+                        self.increment_counter(),
+                        0x00,
+                        0x0e,
+                        0xe0,
+                        0x01,
+                        0x00,
+                        mode,
+                        h,
+                        s,
+                        v,
+                        white_temp,
+                        white_brightness,
+                        0x00,
+                        0x00,
+                        0x14,
+                        0x00,
+                        0x00,
+                    ]
+                )
+            )
+        ]
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
