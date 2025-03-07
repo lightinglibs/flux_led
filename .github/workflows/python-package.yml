@@ -21,7 +21,7 @@ jobs:
           cache: "pip" # caching pip dependencies
       - uses: pre-commit/action@v3.0.1
 
-  build:
+  test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
