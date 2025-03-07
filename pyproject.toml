@@ -139,3 +139,12 @@ select = [
 "flux_led/fluxled.py" = [
     "T201" # print ok
 ]
+
+
+[tool.coverage.run]
+source = ["flux_led"]
+plugins = ["covdefaults"]
+omit = ["fluxled/fluxled.py", "examples/*", "*/dist-packages/*", "tests/*"]
+
+[tool.coverage.report]
+fail_under = 75
