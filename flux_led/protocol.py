@@ -435,7 +435,7 @@ class ProtocolBase:
         """If the protocol supports zones."""
         return False
 
-    def increment_counter(self) -> int:
+    def _increment_counter(self) -> int:
         """Increment the counter byte."""
         self._counter += 1
         if self._counter == 255:
@@ -753,7 +753,7 @@ class ProtocolBase:
                 [
                     *OUTER_MESSAGE_WRAPPER,
                     version,
-                    self.increment_counter(),
+                    self._increment_counter(),
                     inner_msg_len >> 8,
                     inner_msg_len & 0xFF,
                     *inner_msg,
