@@ -26,7 +26,7 @@ def _socket_retry(attempts: int = DEFAULT_RETRIES) -> WrapFuncType:  # type: ign
             **kwargs: Any,
         ) -> Any:
             attempts_remaining = retry + 1
-            while attempts_remaining:
+            while attempts_remaining:  # noqa: RET503
                 attempts_remaining -= 1
                 try:
                     ret = func(self, *args, **kwargs)
@@ -44,6 +44,7 @@ def _socket_retry(attempts: int = DEFAULT_RETRIES) -> WrapFuncType:  # type: ign
                     # always be seen as available in Home Assistant
                     # when it goes offline
                     raise
+            # unreachable
 
         return cast(WrapFuncType, _retry_wrap)
 

@@ -4,6 +4,7 @@ line-length = 88
 
 [tool.ruff.lint]
 ignore = [
+    "S311",
     "F821", # undefined names are used for decorators
     "S101", # use of assert detected
     "S105", # too many false positives

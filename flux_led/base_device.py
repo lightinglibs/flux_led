@@ -581,7 +581,7 @@ class LEDENETDevice:
         if color_modes == COLOR_MODES_RGB_W:  # RGB/W split, only one active at a time
             return COLOR_MODE_DIM if self.white_active else COLOR_MODE_RGB
         if color_modes:
-            return list(color_modes)[0]
+            return next(iter(color_modes))
         return None  # Usually a switch or non-light device
 
     @property
