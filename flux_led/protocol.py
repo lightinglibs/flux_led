@@ -9,7 +9,7 @@ import logging
 from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import NamedTuple
+from typing import NamedTuple, Type, Tuple
 
 from .const import (
     COLOR_MODE_RGB,
@@ -24,6 +24,7 @@ from .const import (
     TRANSITION_JUMP,
     TRANSITION_STROBE,
     LevelWriteMode,
+    LevelWriteMode25Byte,
     MultiColorEffects,
 )
 from .timer import LedTimer
@@ -823,6 +824,17 @@ class ProtocolBase:
             )
         )
 
+    def get_write_mode(self) -> Type[LevelWriteMode]:
+        return LevelWriteMode
+
+    def get_write_all_colors(self) -> Tuple:
+        write_mode = self.get_write_mode()
+        return (write_mode.ALL, write_mode.COLORS)
+
+    def get_write_all_whites(self) -> Tuple:
+        write_mode = self.get_write_mode()
+        return (write_mode.ALL, write_mode.WHITES)
+
 
 class ProtocolLEDENETOriginal(ProtocolBase):
     """The original LEDENET protocol with no checksums."""
@@ -1390,10 +1402,8 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
 
-    @property
-    def timer_len(self) -> int:
-        """Return a single timer len."""
-        return 15
+    def get_write_mode(self) -> Type[LevelWriteMode25Byte]:
+        return LevelWriteMode25Byte
 
     def construct_levels_change(
         self,
@@ -1403,7 +1413,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode25Byte,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for 25-byte LEDENET protocol (w/ checksum at end)
@@ -1421,7 +1431,6 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         #                    |  increment counter
         #                    header
 
-
         if (red is not None and green is not None and blue is not None):
             h, s, v = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)
             h = int((h * 360) / 2) # Hue needs to be halved
@@ -1429,7 +1438,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
             v = int(v * 100)
         else:
             h = s = v = 0x00
-        
+
         if warm_white is not None:
             white_temp = 0x00
             white_brightness = int((warm_white / 255) * 100)
@@ -1439,8 +1448,6 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         else:
             white_temp = 0x00
             white_brightness = 0x00
-
-        mode = 0xA1 if write_mode.value == 0xF0 else 0XB1
 
         return [
             self.construct_message(
@@ -1459,7 +1466,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                         0xe0,
                         0x01,
                         0x00,
-                        mode,
+                        write_mode.value,
                         h,
                         s,
                         v,

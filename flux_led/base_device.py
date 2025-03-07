@@ -49,9 +49,6 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_RED,
     STATE_WARM_WHITE,
     STATIC_MODES,
-    WRITE_ALL_COLORS,
-    WRITE_ALL_WHITES,
-    LevelWriteMode,
     WhiteChannelType,
 )
 from .models_db import (
@@ -1136,13 +1133,16 @@ class LEDENETDevice:
         else:
             w2_value = int(w2)
 
-        write_mode = LevelWriteMode.ALL
+        # color / white write mode changed in Firmware 11 (25 byte)
+        level_write_mode = self._protocol.get_write_mode()
+
+        write_mode = level_write_mode.ALL
         # rgbwprotocol always overwrite both color & whites
         if not self.rgbwprotocol:
             if w is None and w2 is None:
-                write_mode = LevelWriteMode.COLORS
+                write_mode = level_write_mode.COLORS
             elif r is None and g is None and b is None:
-                write_mode = LevelWriteMode.WHITES
+                write_mode = level_write_mode.WHITES
 
         assert self._protocol is not None
         msgs = self._protocol.construct_levels_change(
@@ -1150,11 +1150,11 @@ class LEDENETDevice:
         )
         updates = {}
         multi_mode = self.multi_color_mode
-        if multi_mode or write_mode in WRITE_ALL_COLORS:
+        if multi_mode or write_mode in self._protocol.get_write_all_colors():
             updates.update(
                 {"red": r_value or 0, "green": g_value or 0, "blue": b_value or 0}
             )
-        if multi_mode or write_mode in WRITE_ALL_WHITES:
+        if multi_mode or write_mode in self._protocol.get_write_all_whites():
             updates.update({"warm_white": w_value or 0, "cool_white": w2_value or 0})
         return msgs, updates
 

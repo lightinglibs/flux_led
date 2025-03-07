@@ -21,6 +21,10 @@ class LevelWriteMode(Enum):
     COLORS = 0xF0
     WHITES = 0x0F
 
+class LevelWriteMode25Byte(Enum):
+    ALL = 0x00
+    COLORS = 0xA1
+    WHITES = 0xB1
 
 class MultiColorEffects(Enum):
     STATIC = 0x01
@@ -63,9 +67,6 @@ STATE_CHANGE_LATENCY: Final = 2
 ADDRESSABLE_STATE_CHANGE_LATENCY: Final = 5
 PRESET_PATTERN_CHANGE_LATENCY: Final = 40  # Time to switch to music mode
 
-
-WRITE_ALL_COLORS = (LevelWriteMode.ALL, LevelWriteMode.COLORS)
-WRITE_ALL_WHITES = (LevelWriteMode.ALL, LevelWriteMode.WHITES)
 
 DEFAULT_RETRIES: Final = 2
 
