@@ -4,10 +4,10 @@ import colorsys
 import logging
 import random
 import time
+from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from typing import Any, Union
-from collections.abc import Iterable
 
 from .const import (  # imported for back compat, remove once Home Assistant no longer uses
     ADDRESSABLE_STATE_CHANGE_LATENCY,
@@ -433,10 +433,8 @@ class LEDENETDevice:
         # we need to distingush between devices that are RGB/CCT
         # and ones that are RGB&CCT
         if (
-            COLOR_MODE_CCT not in color_modes
-            and COLOR_MODE_RGBWW in color_modes
-            or self.rgbw_color_temp_support(color_modes)
-        ):
+            COLOR_MODE_CCT not in color_modes and COLOR_MODE_RGBWW in color_modes
+        ) or self.rgbw_color_temp_support(color_modes):
             return {COLOR_MODE_CCT, *color_modes}
         return color_modes
 
@@ -583,7 +581,7 @@ class LEDENETDevice:
         if color_modes == COLOR_MODES_RGB_W:  # RGB/W split, only one active at a time
             return COLOR_MODE_DIM if self.white_active else COLOR_MODE_RGB
         if color_modes:
-            return list(color_modes)[0]
+            return next(iter(color_modes))
         return None  # Usually a switch or non-light device
 
     @property
@@ -710,7 +708,7 @@ class LEDENETDevice:
             return 255
         if color_mode == COLOR_MODE_DIM:
             return int(raw_state.warm_white)
-        elif color_mode == COLOR_MODE_CCT:
+        if color_mode == COLOR_MODE_CCT:
             _, b = self.getWhiteTemperature()
             return b
 
@@ -918,7 +916,7 @@ class LEDENETDevice:
 
         self.raw_state = raw_state
 
-    def __str__(self) -> str:  # noqa: C901
+    def __str__(self) -> str:
         assert self.raw_state is not None
         assert self._protocol is not None
 
@@ -945,9 +943,7 @@ class LEDENETDevice:
                 mode_str = f"Warm White: {utils.byteToPercent(rx.warm_white)}%"
             elif color_mode == COLOR_MODE_CCT:
                 cct_value = self.getWhiteTemperature()
-                mode_str = "CCT: {}K Brightness: {}%".format(
-                    cct_value[0], round(cct_value[1] * 100 / 255)
-                )
+                mode_str = f"CCT: {cct_value[0]}K Brightness: {round(cct_value[1] * 100 / 255)}%"
         elif mode == MODE_PRESET:
             mode_str = f"Pattern: {self.effect} (Speed {self.speed}%)"
         elif mode == MODE_CUSTOM:
@@ -1089,7 +1085,7 @@ class LEDENETDevice:
             }
         )
 
-    def _generate_levels_change(  # noqa: C901
+    def _generate_levels_change(
         self,
         channels: dict[str, int | None],
         persist: bool = True,

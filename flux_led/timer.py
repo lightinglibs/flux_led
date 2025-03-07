@@ -71,7 +71,7 @@ class LedTimer:
         # if no repeat mask and datetime is in past, return True
         if self.repeat_mask != 0:
             return False
-        elif self.year != 0 and self.month != 0 and self.day != 0:
+        if self.year != 0 and self.month != 0 and self.day != 0:
             dt = datetime.datetime(
                 self.year, self.month, self.day, self.hour, self.minute
             )
@@ -204,7 +204,7 @@ class LedTimer:
         14: 0f = turn off, f0 = turn on
     """
 
-    def fromBytes(self, bytes: bytes | bytearray) -> None:  # noqa: C901
+    def fromBytes(self, bytes: bytes | bytearray) -> None:
         self.red = 0
         self.green = 0
         self.blue = 0
@@ -262,7 +262,7 @@ class LedTimer:
             self.turn_on = False
             self.mode = "off"
 
-    def toBytes(self) -> bytearray:  # noqa: C901
+    def toBytes(self) -> bytearray:
         bytes = bytearray(self.length)
         if not self.active:
             bytes[0] = 0x0F
@@ -362,11 +362,6 @@ class LedTimer:
         elif BuiltInTimer.valid(self.pattern_code):
             type = BuiltInTimer.valtostr(self.pattern_code)
 
-            txt += "{} (Duration:{} minutes, Brightness: {}% -> {}%)".format(
-                type,
-                self.duration,
-                utils.byteToPercent(self.brightness_start),
-                utils.byteToPercent(self.brightness_end),
-            )
+            txt += f"{type} (Duration:{self.duration} minutes, Brightness: {utils.byteToPercent(self.brightness_start)}% -> {utils.byteToPercent(self.brightness_end)}%)"
 
         return txt

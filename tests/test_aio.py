@@ -5,8 +5,8 @@ import contextlib
 import datetime
 import json
 import logging
-import time
 import sys
+import time
 from unittest.mock import MagicMock, call, patch
 
 try:
@@ -16,7 +16,7 @@ except ImportError:
 
 import pytest
 
-from flux_led import aiodevice, aioscanner, DeviceUnavailableException
+from flux_led import DeviceUnavailableException, aiodevice, aioscanner
 from flux_led.aio import AIOWifiLedBulb
 from flux_led.aioprotocol import AIOLEDENETProtocol
 from flux_led.aioscanner import AIOBulbScanner, LEDENETDiscovery
@@ -33,8 +33,6 @@ from flux_led.const import (
     WhiteChannelType,
 )
 from flux_led.protocol import (
-    ProtocolLEDENETCCT,
-    ProtocolLEDENETCCTWrapped,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
@@ -42,6 +40,8 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_ORIGINAL,
     PowerRestoreState,
     PowerRestoreStates,
+    ProtocolLEDENETCCT,
+    ProtocolLEDENETCCTWrapped,
     RemoteConfig,
 )
 from flux_led.scanner import (

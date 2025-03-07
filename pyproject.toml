@@ -1,0 +1,150 @@
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+
+[tool.ruff.lint]
+ignore = [
+    "S311",
+    "F821", # undefined names are used for decorators
+    "S101", # use of assert detected
+    "S105", # too many false positives
+    "S104", # intended
+    "SLF001", # intended
+    "SIM109", # intended for cython
+    "SIM102", # intended for cython
+    "E501", # too many to fix,
+    "TC001", # too many to fix right now
+    "TID252", # intended
+    "PLC0414", # intended
+    "TRY003", # too many to fix
+    "PLR2004", # way too many to fix right now
+    "PLR0911", # api is public
+    "PYI036", # too many to fix
+    "PYI034", # too many to fix
+    "TC003", # too many to fix
+    "PYI024", # too many to fix
+    "PGH003", # too many to fix
+    ## should fix these sooner
+    "C901", # too many to fix right now
+    "B007", # too many to fix -- should fix sooner
+    "SIM103", # too many to fix -- should fix sooner
+    "SIM110", # too many to fix -- should fix sooner
+    "RUF012", # too many to fix -- should fix sooner
+    "TRY002", # too many to fix -- should fix sooner
+    "B904", # too many to fix -- should fix sooner
+    "PERF401", # too many to fix -- should fix sooner
+    "B904", # too many to fix -- should fix sooner
+    "PLR1704", # too many to fix -- should fix sooner
+    "B006", # too many to fix -- should fix sooner
+    "G004", # too many to fix -- should fix sooner
+    "PT015", # too many to fix -- should fix sooner
+    "B011", # too many to fix -- should fix sooner
+    "PLR1714", # too many to fix -- should fix sooner
+    "PLR0915", # too many to fix -- should fix sooner
+    "PERF102", # too many to fix -- should fix sooner
+    "TRY401", # too many to fix -- should fix sooner
+    "PLR0913", # too many to fix -- should fix sooner
+    "PLR0912", # too many to fix -- should fix sooner
+    "PERF203", # too many to fix -- should fix sooner
+    "G201", # too many to fix -- should fix sooner
+    "TRY301", # too many to fix -- should fix sooner
+    "B020", # too many to fix -- should fix sooner
+    "S314", # too many to fix -- should fix sooner
+    "RET504", # too many to fix -- should fix sooner
+    "SIM105", # too many to fix -- should fix sooner
+    "TRY300", # too many to fix -- should fix sooner
+    "PLW2901", # too many to fix -- should fix sooner
+    "PERF402", # too many to fix -- should fix sooner
+
+]
+select = [
+    "ASYNC", # async rules
+    "B",   # flake8-bugbear
+    "C9",  # flake8-mcabbe
+    "C4",  # flake8-comprehensions
+    "S",   # flake8-bandit
+    "F",   # pyflake
+    "E",   # pycodestyle
+    "W",   # pycodestyle
+    "UP",  # pyupgrade
+    "I",   # isort
+    "RUF", # ruff specific
+    "FLY", # flynt
+    "FURB", # refurb
+    "G", # flake8-logging-format   ,
+    "PERF", # Perflint
+    "PGH", # pygrep-hooks
+    "PIE", # flake8-pie
+    "PL", # pylint
+    "PT", # flake8-pytest-style
+    "PYI", # flake8-pyi
+    "RET", # flake8-return
+    "RSE", # flake8-raise    ,
+    "SIM", # flake8-simplify
+    "SLF", # flake8-self
+    "SLOT", # flake8-slots
+    "T100", # Trace found: {name} used
+    "T20", # flake8-print
+    "TC", # flake8-type-checking
+    "TID", # Tidy imports
+    "TRY", # tryceratops
+]
+
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*" = [
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "S101",
+    "S108",
+    "SLF001",
+    "PLW", # too many to fix
+    "TRY",# too many to fix right now
+    "PT",# too many to fix right now
+    "B",# too many to fix right now
+    "RET",# too many to fix right now
+    "PLR2004", # too many to fix right now
+    "PT011", # too many to fix right now
+    "PT006", # too many to fix right now
+    "PGH003", # too many to fix right now
+    "PT007", # too many to fix right now
+    "PT027",  # too many to fix right now
+    "PLW0603" , # too many to fix right now
+    "PLR0915", # too many to fix right now
+    "FLY002", # too many to fix right now
+    "PT018", # too many to fix right now
+    "PLR0124", # too many to fix right now
+    "SIM202" , # too many to fix right now
+    "PT012" , # too many to fix right now
+    "TID252", # too many to fix right now
+    "PLR0913", # skip this one
+    "SIM102" , # too many to fix right now
+    "SIM108", # too many to fix right now
+    "TC003",  # too many to fix right now
+    "TC002", # too many to fix right now
+    "T201", # too many to fix right now
+]
+"bench/**/*" = [
+    "T201", # intended
+]
+"examples/**/*" = [
+    "T201", # intended
+    "RSE102", # too many to fix
+    "C408", # too many to fix
+    "T203", # intended
+]
+"flux_led/fluxled.py" = [
+    "T201" # print ok
+]
+
+
+[tool.coverage.run]
+source = ["flux_led"]
+plugins = ["covdefaults"]
+omit = ["fluxled/fluxled.py", "examples/*", "*/dist-packages/*", "tests/*"]
+
+[tool.coverage.report]
+fail_under = 75

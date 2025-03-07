@@ -739,10 +739,7 @@ class ProtocolBase:
         self, msg: bytearray, inner_pre_constructed: bool = False
     ) -> bytearray:
         """Construct a wrapped message."""
-        if inner_pre_constructed:  # msg has already been inner_pre_constructed
-            inner_msg = msg
-        else:
-            inner_msg = self.construct_message(msg)
+        inner_msg = msg if inner_pre_constructed else self.construct_message(msg)
         inner_msg_len = len(inner_msg)
         return self.construct_message(
             bytearray(
@@ -995,7 +992,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a state response is valid."""
         if len(raw_state) != self.state_response_length:
             return False
-        if not raw_state[0] == 0x81:
+        if raw_state[0] != 129:
             return False
         return self.is_checksum_correct(raw_state)
 

@@ -4,7 +4,7 @@
     {
       "label": "Pytest",
       "type": "shell",
-      "command": "pytest tests.py tests_aio.py",
+      "command": "pytest",
       "dependsOn": ["Install all Test Requirements"],
       "group": {
         "kind": "test",
@@ -49,7 +49,7 @@
       "label": "Code Coverage",
       "detail": "Generate code coverage report",
       "type": "shell",
-      "command": "pytest tests.py tests_aio.py --cov=flux_led --cov-report term-missing",
+      "command": "pytest --cov=flux_led --cov-report term-missing",
       "group": {
         "kind": "test",
         "isDefault": true
