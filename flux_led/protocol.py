@@ -9,7 +9,7 @@ import logging
 from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import NamedTuple, Type, Tuple
+from typing import NamedTuple
 
 from .const import (
     COLOR_MODE_RGB,
@@ -824,14 +824,14 @@ class ProtocolBase:
             )
         )
 
-    def get_write_mode(self) -> Type[LevelWriteMode]:
+    def get_write_mode(self) -> type[LevelWriteMode]:
         return LevelWriteMode
 
-    def get_write_all_colors(self) -> Tuple:
+    def get_write_all_colors(self) -> tuple:
         write_mode = self.get_write_mode()
         return (write_mode.ALL, write_mode.COLORS)
 
-    def get_write_all_whites(self) -> Tuple:
+    def get_write_all_whites(self) -> tuple:
         write_mode = self.get_write_mode()
         return (write_mode.ALL, write_mode.WHITES)
 
@@ -1402,7 +1402,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
 
-    def get_write_mode(self) -> Type[LevelWriteMode25Byte]:
+    def get_write_mode(self) -> type[LevelWriteMode25Byte]:
         return LevelWriteMode25Byte
 
     def construct_levels_change(
@@ -1431,9 +1431,9 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         #                    |  increment counter
         #                    header
 
-        if (red is not None and green is not None and blue is not None):
+        if red is not None and green is not None and blue is not None:
             h, s, v = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)
-            h = int((h * 360) / 2) # Hue needs to be halved
+            h = int((h * 360) / 2)  # Hue needs to be halved
             s = int(s * 100)
             v = int(v * 100)
         else:
@@ -1453,17 +1453,17 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
             self.construct_message(
                 bytearray(
                     [
-                        0xb0,
-                        0xb1,
-                        0xb2,
-                        0xb3,
+                        0xB0,
+                        0xB1,
+                        0xB2,
+                        0xB3,
                         0x00,
                         0x01,
                         0x02,
                         self.increment_counter(),
                         0x00,
-                        0x0e,
-                        0xe0,
+                        0x0E,
+                        0xE0,
                         0x01,
                         0x00,
                         write_mode.value,

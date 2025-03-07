@@ -21,10 +21,12 @@ class LevelWriteMode(Enum):
     COLORS = 0xF0
     WHITES = 0x0F
 
+
 class LevelWriteMode25Byte(Enum):
     ALL = 0x00
     COLORS = 0xA1
     WHITES = 0xB1
+
 
 class MultiColorEffects(Enum):
     STATIC = 0x01

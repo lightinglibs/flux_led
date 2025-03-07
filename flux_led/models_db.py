@@ -1034,7 +1034,7 @@ MODELS = [
             "AK001-ZJ2146",
             "AK001-ZJ2147",
             "AK001-ZJ21410",
-            "AK001-ZJ21411"
+            "AK001-ZJ21411",
         ],
         description="Bulb RGBCW",
         always_writes_white_and_colors=False,  # Formerly rgbwprotocol
