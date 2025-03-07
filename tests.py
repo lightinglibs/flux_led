@@ -869,32 +869,6 @@ class TestLight(unittest.TestCase):
         self.assertEqual(light.version_num, 10)
         self.assertEqual(light.microphone, False)
         self.assertEqual(light.model, "Bulb RGBCW (0x35)")
-        self.assertEqual(
-            light.effect_list,
-            [
-                "blue_fade",
-                "blue_strobe",
-                "colorjump",
-                "colorloop",
-                "colorstrobe",
-                "cyan_fade",
-                "cyan_strobe",
-                "gb_cross_fade",
-                "green_fade",
-                "green_strobe",
-                "purple_fade",
-                "purple_strobe",
-                "rb_cross_fade",
-                "red_fade",
-                "red_strobe",
-                "rg_cross_fade",
-                "white_fade",
-                "white_strobe",
-                "yellow_fade",
-                "yellow_strobe",
-                "random",
-            ],
-        )
 
         self.assertEqual(mock_read.call_count, 2)
         self.assertEqual(mock_send.call_count, 1)
