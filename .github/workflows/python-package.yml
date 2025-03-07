@@ -39,6 +39,6 @@ jobs:
           flake8 . --count --max-complexity=10 --max-line-length=127 --statistics
       - name: Test with pytest
         run: |
-          pytest --cov=flux_led --cov-report term-missing --cov-report xml -- tests.py tests_aio.py
+          pytest --cov=flux_led --cov-report term-missing --cov-report xml -- tests
       - name: Upload codecov
         uses: codecov/codecov-action@v5

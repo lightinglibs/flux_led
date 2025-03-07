@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 import unittest
-import unittest.mock as mock
+from unittest import mock
 from unittest.mock import patch
 
 import pytest

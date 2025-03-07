@@ -1,8 +1,8 @@
 import asyncio
 import logging
 import socket
-
 from typing import Optional
+
 from flux_led.aioscanner import AIOBulbScanner
 from flux_led.protocol import OUTER_MESSAGE_WRAPPER
 

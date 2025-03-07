@@ -10,11 +10,11 @@ from .timer import LedTimer
 from .utils import utils
 
 __all__ = [
-    "DeviceType",
-    "PresetPattern",
-    "LedTimer",
-    "WifiLedBulb",
     "BulbScanner",
-    "utils",
+    "DeviceType",
     "DeviceUnavailableException",
+    "LedTimer",
+    "PresetPattern",
+    "WifiLedBulb",
+    "utils",
 ]

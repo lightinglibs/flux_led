@@ -5,8 +5,8 @@ import colorsys
 import contextlib
 import datetime
 from collections import namedtuple
-from typing import cast
 from collections.abc import Iterable
+from typing import cast
 
 import webcolors  # type: ignore[import-untyped]
 

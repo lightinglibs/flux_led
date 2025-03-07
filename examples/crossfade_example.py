@@ -8,10 +8,10 @@ The python file with the Flux LED wrapper classes should live in
 the same folder as this script
 """
 
-from itertools import cycle
 import os
 import sys
 import time
+from itertools import cycle
 
 from flux_led import BulbScanner, WifiLedBulb
 

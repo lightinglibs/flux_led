@@ -115,7 +115,6 @@ class AIOWifiLedBulb(LEDENETDevice):
         except Exception:  # pylint: disable=broad-except
             self._async_stop()
             raise
-        return
 
     async def _async_setup(self) -> None:
         await self._async_determine_protocol()
@@ -229,7 +228,7 @@ class AIOWifiLedBulb(LEDENETDevice):
             # The magic home app will accept any response as success
             # so after a few tries, we do as well.
             return True
-        elif power_state_future.done() or state_future.done():
+        if power_state_future.done() or state_future.done():
             _LOGGER.debug(
                 "%s: Bulb power state change taking longer than expected to %s, sending state query",
                 self.ipaddr,
@@ -340,7 +339,7 @@ class AIOWifiLedBulb(LEDENETDevice):
                 # then no need to poll except for the interval
                 # to make sure the device is still responding
                 return
-            elif self._protocol.power_push_updates:
+            if self._protocol.power_push_updates:
                 # If the device pushes power updates
                 # then no need to poll except for the interval
                 # to make sure the device is still responding
