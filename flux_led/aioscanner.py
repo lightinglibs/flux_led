@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from .aioutils import asyncio_timeout
 from .scanner import MESSAGE_SEND_INTERLEAVE_DELAY, BulbScanner, FluxLEDDiscovery
@@ -128,7 +128,7 @@ class AIOBulbScanner(BulbScanner):
             try:
                 async with asyncio_timeout(time_out):
                     await asyncio.shield(found_all_future)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             else:
                 return  # found_all

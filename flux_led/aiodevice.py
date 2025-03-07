@@ -4,8 +4,9 @@ import asyncio
 import logging
 import time
 from asyncio import ALL_COMPLETED, FIRST_COMPLETED
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from .aioprotocol import AIOLEDENETProtocol
 from .aioscanner import AIOBulbScanner
@@ -140,7 +141,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         try:
             async with asyncio_timeout(self.timeout):
                 await self._remote_config_future
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _LOGGER.warning("%s: Could not determine 2.4ghz remote config", self.ipaddr)
 
     async def _async_switch_setup(self) -> None:
@@ -150,7 +151,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         try:
             async with asyncio_timeout(self.timeout):
                 await self._power_restore_future
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.set_unavailable("Could not determine power restore state")
             raise DeviceUnavailableException(
                 f"{self.ipaddr}: Could not determine power restore state"
@@ -172,7 +173,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         try:
             async with asyncio_timeout(self.timeout):
                 await self._device_config_future
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self.set_unavailable("Could not determine number pixels")
             raise DeviceUnavailableException(
                 f"{self.ipaddr}: Could not determine number pixels"
@@ -320,7 +321,8 @@ class AIOWifiLedBulb(LEDENETDevice):
             await self.async_set_levels(None, None, None, warm, cold, persist=persist)
 
     async def async_update(self, force: bool = False) -> None:
-        """Request an update.
+        """
+        Request an update.
 
         The callback will be triggered when the state is recieved.
         """
@@ -358,7 +360,7 @@ class AIOWifiLedBulb(LEDENETDevice):
             )
         try:
             await self._async_send_state_query()
-        except asyncio.TimeoutError as ex:
+        except TimeoutError as ex:
             raise DeviceUnavailableException(
                 f"{self.ipaddr}: timed out trying to connect after {self.timeout} seconds"
             ) from ex
@@ -628,7 +630,7 @@ class AIOWifiLedBulb(LEDENETDevice):
             try:
                 async with asyncio_timeout(self.timeout):
                     await self._get_time_future
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.warning("%s: Could not get time from the device", self.ipaddr)
                 return None
             return self._last_time
@@ -645,7 +647,7 @@ class AIOWifiLedBulb(LEDENETDevice):
             try:
                 async with asyncio_timeout(self.timeout):
                     await self._get_timers_future
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.warning("%s: Could not get timers from the device", self.ipaddr)
                 return None
             return self._timers
@@ -786,7 +788,8 @@ class AIOWifiLedBulb(LEDENETDevice):
             _LOGGER.exception("Error while calling callback: %s", ex)
 
     def process_power_restore_state_response(self, msg: bytes) -> None:
-        """Process a power restore state response.
+        """
+        Process a power restore state response.
         Power on state always off
         f0 32 ff f0 f0 f0 f1
         Power on state always on
@@ -862,7 +865,7 @@ class AIOWifiLedBulb(LEDENETDevice):
                 try:
                     async with asyncio_timeout(self.timeout):
                         await self._determine_protocol_future
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     self._async_close()
                     continue
                 else:

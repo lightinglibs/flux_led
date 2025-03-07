@@ -88,7 +88,8 @@ def _strip_new_lines(msg: str) -> str:
 
 
 def _process_discovery_message(data: FluxLEDDiscovery, decoded_data: str) -> None:
-    """Process response from b'HF-A11ASSISTHREAD'
+    """
+    Process response from b'HF-A11ASSISTHREAD'
 
     b'192.168.214.252,B4E842E10588,AK001-ZJ2145'
     """
@@ -106,7 +107,8 @@ def _process_discovery_message(data: FluxLEDDiscovery, decoded_data: str) -> Non
 
 
 def _process_version_message(data: FluxLEDDiscovery, decoded_data: str) -> None:
-    r"""Process response from b'AT+LVER\r'
+    r"""
+    Process response from b'AT+LVER\r'
 
     b'+ok=07_06_20210106_ZG-BL\r'
     """
@@ -139,7 +141,8 @@ def _process_version_message(data: FluxLEDDiscovery, decoded_data: str) -> None:
 
 
 def _process_remote_access_message(data: FluxLEDDiscovery, decoded_data: str) -> None:
-    """Process response from b'AT+SOCKB\r'
+    """
+    Process response from b'AT+SOCKB\r'
 
     b'+ok=TCP,8816,ra8816us02.magichue.net\r'
     """
@@ -204,7 +207,8 @@ class BulbScanner:
         address: Optional[str],
         response_list: dict[str, FluxLEDDiscovery],
     ) -> bool:
-        """Process a response.
+        """
+        Process a response.
 
         Returns True if processing should stop
         """
@@ -309,7 +313,8 @@ class BulbScanner:
     def scan(
         self, timeout: int = 10, address: Optional[str] = None
     ) -> list[FluxLEDDiscovery]:
-        """Scan for bulbs.
+        """
+        Scan for bulbs.
 
         If an address is provided, the scan will return
         as soon as it gets a response from that address
@@ -343,7 +348,7 @@ class BulbScanner:
                 try:
                     data, addr = sock.recvfrom(self.RESPONSE_SIZE)
                     _LOGGER.debug("discover: %s <= %s", addr, data)
-                except socket.timeout:
+                except TimeoutError:
                     continue
 
                 if self._process_response(data, addr, address, self._discoveries):

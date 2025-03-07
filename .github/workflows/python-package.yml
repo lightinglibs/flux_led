@@ -29,9 +29,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install flake8 pytest .[test] -r requirements.txt -r requirements_test.txt
       - uses: pre-commit/action@v3.0.1
-      - name: mypy
-        run: |
-          mypy flux_led
       - name: Test with pytest
         run: |
           pytest --cov=flux_led --cov-report term-missing --cov-report xml -- tests

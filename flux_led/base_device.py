@@ -682,7 +682,8 @@ class LEDENETDevice:
 
     @property
     def brightness(self) -> int:
-        """Return current brightness 0-255.
+        """
+        Return current brightness 0-255.
 
         For warm white return current led level. For RGB
         calculate the HSV and return the 'value'.
@@ -857,7 +858,8 @@ class LEDENETDevice:
         raw_state: LEDENETOriginalRawState | LEDENETRawState,
         updated: set[str] | None = None,
     ) -> None:
-        """Set the raw state remapping channels as needed.
+        """
+        Set the raw state remapping channels as needed.
 
         The goal is to normalize the data so the raw state
         is always in the same format reguardless of the protocol
@@ -1151,7 +1153,8 @@ class LEDENETDevice:
         return msgs, updates
 
     def _set_transition_complete_time(self) -> None:
-        """Set the time we expect the transition will be completed.
+        """
+        Set the time we expect the transition will be completed.
 
         Devices fade to a specific state so we want to avoid
         consuming state updates into self.raw_state while a transition
