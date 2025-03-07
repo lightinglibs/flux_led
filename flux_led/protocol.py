@@ -830,13 +830,13 @@ class ProtocolBase:
     def get_write_mode(self) -> type[LevelWriteMode]:
         return LevelWriteMode
 
-    def get_write_all_colors(self) -> tuple:
+    def get_write_all_colors(self) -> set[LevelWriteMode]:
         write_mode = self.get_write_mode()
-        return (write_mode.ALL, write_mode.COLORS)
+        return {write_mode.ALL, write_mode.COLORS}
 
-    def get_write_all_whites(self) -> tuple:
+    def get_write_all_whites(self) -> set[LevelWriteMode]:
         write_mode = self.get_write_mode()
-        return (write_mode.ALL, write_mode.WHITES)
+        return {write_mode.ALL, write_mode.WHITES}
 
 
 class ProtocolLEDENETOriginal(ProtocolBase):
