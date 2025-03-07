@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-"""Example to cycle a bulb between colors in a list, with a smooth fade between.
+"""
+Example to cycle a bulb between colors in a list, with a smooth fade between.
 
 Assumes the bulb is already on.
 
