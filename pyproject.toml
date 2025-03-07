@@ -25,6 +25,7 @@ ignore = [
     "PYI024", # too many to fix
     "PGH003", # too many to fix
     ## should fix these sooner
+    "C901", # too many to fix right now
     "B007", # too many to fix -- should fix sooner
     "SIM103", # too many to fix -- should fix sooner
     "SIM110", # too many to fix -- should fix sooner
@@ -59,6 +60,7 @@ ignore = [
 select = [
     "ASYNC", # async rules
     "B",   # flake8-bugbear
+    "C9",  # flake8-mcabbe
     "C4",  # flake8-comprehensions
     "S",   # flake8-bandit
     "F",   # pyflake
