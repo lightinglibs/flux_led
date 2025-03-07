@@ -6,10 +6,8 @@ setup_requirements = [
 
 test_requirements = [
     "pytest-asyncio",
-    "black>=19.10b0",
+    "ruff==0.9.9",
     "codecov>=2.1.4",
-    "flake8>=3.8.3",
-    "flake8-debugger>=3.2.1",
     "pytest>=5.4.3",
     "pytest-cov>=2.9.0",
     "pytest-raises>=0.11",

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from enum import Enum
-
 from typing import Final  # pylint: disable=no-name-in-module
 
 MIN_TEMP: Final = 2700
@@ -88,7 +87,7 @@ TRANSITION_GRADUAL: Final = "gradual"
 STATIC_MODES = {MODE_COLOR, MODE_WW}
 
 # Non light device models
-MODEL_NUMS_SWITCHS = {0x19, 0x93, 0x0B, 0x93, 0x94, 0x95, 0x96, 0x97}
+MODEL_NUMS_SWITCHS = {0x19, 0x93, 0x0B, 0x94, 0x95, 0x96, 0x97}
 
 COLOR_MODES_RGB = {COLOR_MODE_RGB, COLOR_MODE_RGBW, COLOR_MODE_RGBWW}
 COLOR_MODES_RGB_CCT = {  # AKA Split RGB & CCT modes used for bulbs/lamps

@@ -195,7 +195,7 @@ Example setting strings:
     print(timerhelp_text)
 
 
-def processSetTimerArgs(parser: OptionParser, args: Any) -> LedTimer:  # noqa: C901
+def processSetTimerArgs(parser: OptionParser, args: Any) -> LedTimer:
     mode = args[1]
     num = args[0]
     settings = args[2]
@@ -386,7 +386,7 @@ def processCustomArgs(
     return args[0], speed, color_list
 
 
-def parseArgs() -> tuple[Values, Any]:  # noqa: C901
+def parseArgs() -> tuple[Values, Any]:
     parser = OptionParser()
 
     parser.description = "A utility to control Flux WiFi LED Bulbs. "
@@ -620,7 +620,7 @@ def parseArgs() -> tuple[Values, Any]:  # noqa: C901
     if options.listcolors:
         for c in utils.get_color_names_list():  # type: ignore
             print(f"{c}, ")
-        print("")
+        print()
         sys.exit(0)
 
     if options.settimer:
@@ -698,7 +698,7 @@ def parseArgs() -> tuple[Values, Any]:  # noqa: C901
 # -------------------------------------------
 
 
-async def _async_run_commands(  # noqa: C901
+async def _async_run_commands(
     bulb: AIOWifiLedBulb, info: FluxLEDDiscovery, options: Any
 ) -> None:
     """Run requested commands on a bulb."""
@@ -719,31 +719,27 @@ async def _async_run_commands(  # noqa: C901
     if options.ww is not None:
         if options.ww > 100:
             raise ValueError("Input can not be higher than 100%")
-        else:
-            buf_in(f"Setting warm white mode, level: {options.ww}%")
-            await bulb.async_set_levels(
-                w=utils.percentToByte(options.ww), persist=not options.volatile
-            )
+        buf_in(f"Setting warm white mode, level: {options.ww}%")
+        await bulb.async_set_levels(
+            w=utils.percentToByte(options.ww), persist=not options.volatile
+        )
 
     if options.cw is not None:
         if options.cw > 100:
             raise ValueError("Input can not be higher than 100%")
-        else:
-            buf_in(f"Setting cold white mode, level: {options.cw}%")
-            await bulb.async_set_levels(
-                w2=utils.percentToByte(options.cw), persist=not options.volatile
-            )
+        buf_in(f"Setting cold white mode, level: {options.cw}%")
+        await bulb.async_set_levels(
+            w2=utils.percentToByte(options.cw), persist=not options.volatile
+        )
 
     if options.cct is not None:
         if options.cct[1] > 100:
             raise ValueError("Brightness can not be higher than 100%")
-        elif options.cct[0] < 2700 or options.cct[0] > 6500:
+        if options.cct[0] < 2700 or options.cct[0] > 6500:
             buf_in("Color Temp must be between 2700 and 6500")
         else:
             buf_in(
-                "Setting LED temperature {}K and brightness: {}%".format(
-                    options.cct[0], options.cct[1]
-                )
+                f"Setting LED temperature {options.cct[0]}K and brightness: {options.cct[1]}%"
             )
             await bulb.async_set_white_temp(
                 options.cct[0], options.cct[1] * 2.55, persist=not options.volatile
@@ -760,7 +756,7 @@ async def _async_run_commands(  # noqa: C901
             buf_in(f"[{name}]")
         if any(i < 0 or i > 255 for i in options.color):
             raise ValueError("Invalid value received must be between 0-255")
-        elif len(options.color) == 3:
+        if len(options.color) == 3:
             await bulb.async_set_levels(
                 options.color[0],
                 options.color[1],
@@ -790,16 +786,12 @@ async def _async_run_commands(  # noqa: C901
             options.custom[2], options.custom[1], options.custom[0]
         )
         buf_in(
-            "Setting custom pattern: {}, Speed={}%, {}".format(
-                options.custom[0], options.custom[1], options.custom[2]
-            )
+            f"Setting custom pattern: {options.custom[0]}, Speed={options.custom[1]}%, {options.custom[2]}"
         )
 
     elif options.preset is not None:
         buf_in(
-            "Setting preset pattern: {}, Speed={}%".format(
-                PresetPattern.valtostr(options.preset[0]), options.preset[1]
-            )
+            f"Setting preset pattern: {PresetPattern.valtostr(options.preset[0])}, Speed={options.preset[1]}%"
         )
         await bulb.async_set_preset_pattern(options.preset[0], options.preset[1])
 
@@ -833,9 +825,7 @@ async def _async_run_commands(  # noqa: C901
     print(buffer.rstrip("\n"))
 
 
-async def _async_process_bulb(  # noqa: C901
-    info: FluxLEDDiscovery, options: Any
-) -> None:
+async def _async_process_bulb(info: FluxLEDDiscovery, options: Any) -> None:
     """Process a bulb."""
     bulb = AIOWifiLedBulb(info["ipaddr"], discovery=info)
     await bulb.async_setup(lambda *args: None)
@@ -845,7 +835,7 @@ async def _async_process_bulb(  # noqa: C901
         await bulb.async_stop()
 
 
-async def async_main() -> None:  # noqa: C901
+async def async_main() -> None:
     (options, args) = parseArgs()
     scanner = AIOBulbScanner()
 

@@ -241,7 +241,6 @@ class WifiLedBulb(LEDENETDevice):
                 rx.extend(chunk)
             except OSError as ex:
                 _LOGGER.debug("%s: socket error: %s", self.ipaddr, ex)
-                pass
             finally:
                 self._socket.setblocking(True)
         return rx

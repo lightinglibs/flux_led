@@ -5,7 +5,11 @@ import select
 import socket
 import time
 from datetime import date
-from typing import Optional, Union
+from typing import (
+    Optional,
+    TypedDict,  # pylint: disable=no-name-in-module
+    Union,
+)
 
 from .const import (
     ATTR_FIRMWARE_DATE,
@@ -20,9 +24,6 @@ from .const import (
     ATTR_REMOTE_ACCESS_PORT,
     ATTR_VERSION_NUM,
 )
-
-from typing import TypedDict  # pylint: disable=no-name-in-module
-
 from .models_db import get_model_description
 
 _LOGGER = logging.getLogger(__name__)

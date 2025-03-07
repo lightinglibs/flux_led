@@ -60,11 +60,7 @@ def main():
         print(f"Information for {location}/{city.region}\n")
         print(f"Timezone: {timezone}")
 
-        print(
-            "Latitude: {:.02f}; Longitude: {:.02f}\n".format(
-                city.latitude, city.longitude
-            )
-        )
+        print(f"Latitude: {city.latitude:.02f}; Longitude: {city.longitude:.02f}\n")
 
         print("Dawn:    {}".format(sun["dawn"]))
         print("Sunrise: {}".format(sun["sunrise"]))
