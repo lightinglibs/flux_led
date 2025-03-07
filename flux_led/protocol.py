@@ -1613,7 +1613,7 @@ class ProtocolLEDENETAddressableA1(ProtocolLEDENETAddressableBase):
         assert wiring is not None
         return self.construct_message(
             bytearray(
-                (
+                [
                     0x62,
                     pixels_per_segment >> 8,
                     pixels_per_segment & 0xFF,
@@ -1626,7 +1626,7 @@ class ProtocolLEDENETAddressableA1(ProtocolLEDENETAddressableBase):
                     0x00,
                     wiring,
                     0xF0,
-                )
+                ]
             )
         )
 
