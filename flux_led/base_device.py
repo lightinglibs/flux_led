@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
 from enum import Enum
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from .const import (  # imported for back compat, remove once Home Assistant no longer uses
     ADDRESSABLE_STATE_CHANGE_LATENCY,
@@ -49,9 +49,6 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_RED,
     STATE_WARM_WHITE,
     STATIC_MODES,
-    WRITE_ALL_COLORS,
-    WRITE_ALL_WHITES,
-    LevelWriteMode,
     WhiteChannelType,
 )
 from .models_db import (
@@ -86,6 +83,7 @@ from .protocol import (
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_9BYTE_AUTO_ON,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS,
+    PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
     PROTOCOL_LEDENET_ADDRESSABLE_A2,
     PROTOCOL_LEDENET_ADDRESSABLE_A3,
@@ -105,6 +103,7 @@ from .protocol import (
     ProtocolLEDENET9Byte,
     ProtocolLEDENET9ByteAutoOn,
     ProtocolLEDENET9ByteDimmableEffects,
+    ProtocolLEDENET25Byte,
     ProtocolLEDENETAddressableA1,
     ProtocolLEDENETAddressableA2,
     ProtocolLEDENETAddressableA3,
@@ -143,6 +142,7 @@ PROTOCOL_TYPES = Union[
     ProtocolLEDENET9Byte,
     ProtocolLEDENET9ByteAutoOn,
     ProtocolLEDENET9ByteDimmableEffects,
+    ProtocolLEDENET25Byte,
     ProtocolLEDENETAddressableA1,
     ProtocolLEDENETAddressableA2,
     ProtocolLEDENETAddressableA3,
@@ -186,6 +186,7 @@ PROTOCOL_NAME_TO_CLS = {
     PROTOCOL_LEDENET_9BYTE: ProtocolLEDENET9Byte,
     PROTOCOL_LEDENET_9BYTE_AUTO_ON: ProtocolLEDENET9ByteAutoOn,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS: ProtocolLEDENET9ByteDimmableEffects,
+    PROTOCOL_LEDENET_25BYTE: ProtocolLEDENET25Byte,
     PROTOCOL_LEDENET_ADDRESSABLE_A3: ProtocolLEDENETAddressableA3,
     PROTOCOL_LEDENET_ADDRESSABLE_A2: ProtocolLEDENETAddressableA2,
     PROTOCOL_LEDENET_ADDRESSABLE_A1: ProtocolLEDENETAddressableA1,
@@ -1128,13 +1129,18 @@ class LEDENETDevice:
         else:
             w2_value = int(w2)
 
-        write_mode = LevelWriteMode.ALL
+        # color / white write mode changed in Firmware 11 (25 byte)
+        if TYPE_CHECKING:
+            assert self._protocol is not None, "Protocol should not be None"
+        level_write_mode = self._protocol.level_write_modes
+
+        write_mode = level_write_mode.ALL
         # rgbwprotocol always overwrite both color & whites
         if not self.rgbwprotocol:
             if w is None and w2 is None:
-                write_mode = LevelWriteMode.COLORS
+                write_mode = level_write_mode.COLORS
             elif r is None and g is None and b is None:
-                write_mode = LevelWriteMode.WHITES
+                write_mode = level_write_mode.WHITES
 
         assert self._protocol is not None
         msgs = self._protocol.construct_levels_change(
@@ -1142,11 +1148,11 @@ class LEDENETDevice:
         )
         updates = {}
         multi_mode = self.multi_color_mode
-        if multi_mode or write_mode in WRITE_ALL_COLORS:
+        if multi_mode or write_mode in self._protocol.get_write_all_colors():
             updates.update(
                 {"red": r_value or 0, "green": g_value or 0, "blue": b_value or 0}
             )
-        if multi_mode or write_mode in WRITE_ALL_WHITES:
+        if multi_mode or write_mode in self._protocol.get_write_all_whites():
             updates.update({"warm_white": w_value or 0, "cool_white": w2_value or 0})
         return msgs, updates
 

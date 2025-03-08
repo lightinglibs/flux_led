@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Final  # pylint: disable=no-name-in-module
 
@@ -15,10 +16,18 @@ class WhiteChannelType(Enum):
     COLD = MAX_TEMP
 
 
+# Legacy LevelWriteModel left for backwards compatibility
 class LevelWriteMode(Enum):
     ALL = 0x00
     COLORS = 0xF0
     WHITES = 0x0F
+
+
+@dataclass(frozen=True)
+class LevelWriteModeData:
+    ALL: int
+    COLORS: int
+    WHITES: int
 
 
 class MultiColorEffects(Enum):
@@ -62,7 +71,8 @@ STATE_CHANGE_LATENCY: Final = 2
 ADDRESSABLE_STATE_CHANGE_LATENCY: Final = 5
 PRESET_PATTERN_CHANGE_LATENCY: Final = 40  # Time to switch to music mode
 
-
+# WRITE_ALL_COLORS and WRITE_ALL_WHITES are used in external
+# libraries, leaving them for backwards compatibility
 WRITE_ALL_COLORS = (LevelWriteMode.ALL, LevelWriteMode.COLORS)
 WRITE_ALL_WHITES = (LevelWriteMode.ALL, LevelWriteMode.WHITES)
 
