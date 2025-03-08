@@ -1132,7 +1132,7 @@ class LEDENETDevice:
         # color / white write mode changed in Firmware 11 (25 byte)
         if TYPE_CHECKING:
             assert self._protocol is not None, "Protocol should not be None"
-        level_write_mode = self._protocol.level_write_mode
+        level_write_mode = self._protocol.level_write_modes
 
         write_mode = level_write_mode.ALL
         # rgbwprotocol always overwrite both color & whites
