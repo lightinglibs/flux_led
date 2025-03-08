@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
 from enum import Enum
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from .const import (  # imported for back compat, remove once Home Assistant no longer uses
     ADDRESSABLE_STATE_CHANGE_LATENCY,
@@ -1130,7 +1130,9 @@ class LEDENETDevice:
             w2_value = int(w2)
 
         # color / white write mode changed in Firmware 11 (25 byte)
-        level_write_mode = self._protocol.get_write_mode()
+        if TYPE_CHECKING:
+            assert self._protocol is not None, "Protocol should not be None"
+        level_write_mode = self._protocol.level_write_mode
 
         write_mode = level_write_mode.ALL
         # rgbwprotocol always overwrite both color & whites

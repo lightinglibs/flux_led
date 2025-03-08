@@ -24,7 +24,6 @@ from .const import (
     TRANSITION_JUMP,
     TRANSITION_STROBE,
     LevelWriteMode,
-    LevelWriteMode25Byte,
     MultiColorEffects,
 )
 from .timer import LedTimer
@@ -410,6 +409,7 @@ class ProtocolBase:
     """The base protocol."""
 
     power_state_response_length = MSG_LENGTHS[MSG_POWER_STATE]
+    level_write_mode = LevelWriteMode(ALL=0x00, COLORS=0xF0, WHITES=0x0F)
 
     def __init__(self) -> None:
         self._counter = -1
@@ -688,7 +688,7 @@ class ProtocolBase:
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
 
@@ -827,16 +827,11 @@ class ProtocolBase:
             )
         )
 
-    def get_write_mode(self) -> type[LevelWriteMode]:
-        return LevelWriteMode
+    def get_write_all_colors(self) -> set[int]:
+        return {self.level_write_mode.ALL, self.level_write_mode.COLORS}
 
-    def get_write_all_colors(self) -> set[LevelWriteMode]:
-        write_mode = self.get_write_mode()
-        return {write_mode.ALL, write_mode.COLORS}
-
-    def get_write_all_whites(self) -> set[LevelWriteMode]:
-        write_mode = self.get_write_mode()
-        return {write_mode.ALL, write_mode.WHITES}
+    def get_write_all_whites(self) -> set[int]:
+        return {self.level_write_mode.ALL, self.level_write_mode.WHITES}
 
 
 class ProtocolLEDENETOriginal(ProtocolBase):
@@ -885,7 +880,7 @@ class ProtocolLEDENETOriginal(ProtocolBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for original LEDENET protocol (w/o checksum at end)
@@ -927,7 +922,7 @@ class ProtocolLEDENETOriginalRGBW(ProtocolLEDENETOriginal):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for original LEDENET RGBW protocol (w/o checksum at end)
@@ -940,7 +935,7 @@ class ProtocolLEDENETOriginalRGBW(ProtocolLEDENETOriginal):
                         green or 0x00,
                         blue or 0x00,
                         warm_white or 0x00,
-                        write_mode.value,
+                        write_mode,
                         0xAA,
                     ]
                 )
@@ -962,7 +957,7 @@ class ProtocolLEDENETOriginalCCT(ProtocolLEDENETOriginal):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for original LEDENET protocol (w/o checksum at end)
@@ -1043,7 +1038,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for 8-byte protocols (w/ checksum at end)
@@ -1079,7 +1074,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
                         green or 0x00,
                         blue or 0x00,
                         warm_white or 0x00,
-                        write_mode.value,
+                        write_mode,
                         0x0F,
                     ]
                 )
@@ -1321,7 +1316,7 @@ class ProtocolLEDENET9Byte(ProtocolLEDENET8Byte):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for 9-byte LEDENET protocol (w/ checksum at end)
@@ -1347,7 +1342,7 @@ class ProtocolLEDENET9Byte(ProtocolLEDENET8Byte):
                         blue or 0x00,
                         warm_white or 0x00,
                         cool_white or 0x00,
-                        write_mode.value,
+                        write_mode,
                         0x0F,
                     ]
                 )
@@ -1404,13 +1399,12 @@ class ProtocolLEDENET9ByteDimmableEffects(ProtocolLEDENET9ByteAutoOn):
 class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
     """25 byte protocol"""
 
+    level_write_mode = LevelWriteMode(ALL=0x00, COLORS=0xA1, WHITES=0xB1)
+
     @property
     def name(self) -> str:
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
-
-    def get_write_mode(self) -> type[LevelWriteMode25Byte]:
-        return LevelWriteMode25Byte
 
     def construct_levels_change(
         self,
@@ -1420,7 +1414,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode25Byte,
+        write_mode: int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for 25-byte LEDENET protocol (w/ checksum at end)
@@ -1463,7 +1457,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                         0xE0,
                         0x01,
                         0x00,
-                        write_mode.value,
+                        write_mode,
                         h,
                         s,
                         v,
@@ -1680,7 +1674,7 @@ class ProtocolLEDENETAddressableA2(ProtocolLEDENETAddressableBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """
         The bytes to send for a level change request.
@@ -2090,7 +2084,7 @@ class ProtocolLEDENETAddressableA3(ProtocolLEDENETAddressableA2):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """
         The bytes to send for a level change request.
@@ -2290,7 +2284,7 @@ class ProtocolLEDENETCCT(ProtocolLEDENET9Byte):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """
         The bytes to send for a level change request.
@@ -2362,7 +2356,7 @@ class ProtocolLEDENETCCTWrapped(ProtocolLEDENETCCT):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """
         The bytes to send for a level change request.
@@ -2456,7 +2450,7 @@ class ProtocolLEDENETAddressableChristmas(ProtocolLEDENETAddressableBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: int,
     ) -> list[bytearray]:
         """
         The bytes to send for a level change request.

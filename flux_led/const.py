@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Final  # pylint: disable=no-name-in-module
 
@@ -15,16 +16,11 @@ class WhiteChannelType(Enum):
     COLD = MAX_TEMP
 
 
-class LevelWriteMode(Enum):
-    ALL = 0x00
-    COLORS = 0xF0
-    WHITES = 0x0F
-
-
-class LevelWriteMode25Byte(Enum):
-    ALL = 0x00
-    COLORS = 0xA1
-    WHITES = 0xB1
+@dataclass(frozen=True)
+class LevelWriteMode:
+    ALL: int
+    COLORS: int
+    WHITES: int
 
 
 class MultiColorEffects(Enum):
