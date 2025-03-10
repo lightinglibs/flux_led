@@ -871,9 +871,9 @@ class TestLight(unittest.TestCase):
 
         light.setRgb(255, 100, 50)
         self.assertEqual(mock_send.call_count, 2)
-        self.assertEqual(light.getRgb(), (255, 100, 50)) 
+        self.assertEqual(light.getRgb(), (255, 100, 50))
         self.assertEqual(light.getRgbw(), (255, 100, 50, 0))
-        self.assertEqual(light.getRgbww(), (255, 100, 50, 0, 0)) 
+        self.assertEqual(light.getRgbww(), (255, 100, 50, 0, 0))
 
         light.setColdWhite255(200)
         self.assertEqual(mock_send.call_count, 3)
@@ -888,12 +888,10 @@ class TestLight(unittest.TestCase):
         self.assertEqual(light.getRgbw(), (255, 255, 255, 255))
         self.assertEqual(light.getRgbww(), (255, 255, 255, 255, 255))
 
-
         light.update_state()
         self.assertEqual(mock_read.call_count, 3)
         self.assertEqual(mock_send.call_count, 6)
         self.assertEqual(mock_send.call_args, mock.call(bytearray(LEDENET_STATE_QUERY)))
-
 
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
