@@ -40,6 +40,7 @@ from .protocol import (
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_9BYTE_AUTO_ON,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS,
+    PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
     PROTOCOL_LEDENET_ADDRESSABLE_A2,
     PROTOCOL_LEDENET_ADDRESSABLE_A3,
@@ -1024,6 +1025,7 @@ MODELS = [
         # 'AK001-ZJ2146' is v9.62, 40w flood light, newer smart bulbs (with RF remote control support)
         # 'AK001-ZJ2147' is v9.7 (with RF remote control support)
         # 'AK001-ZJ21410' is v9.91 seen on the Bunpeon smart floor light ASIN:B09MN65324
+        # 'AK001-ZJ21411' is v11.78 with Remote and 2.4G remote settings
         models=[
             "AK001-ZJ200",
             "AK001-ZJ2101",
@@ -1032,10 +1034,12 @@ MODELS = [
             "AK001-ZJ2146",
             "AK001-ZJ2147",
             "AK001-ZJ21410",
+            "AK001-ZJ21411",
         ],
         description="Bulb RGBCW",
         always_writes_white_and_colors=False,  # Formerly rgbwprotocol
         protocols=[
+            MinVersionProtocol(10, PROTOCOL_LEDENET_25BYTE),
             MinVersionProtocol(9, PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS),
             MinVersionProtocol(7, PROTOCOL_LEDENET_9BYTE_AUTO_ON),
             MinVersionProtocol(0, PROTOCOL_LEDENET_9BYTE),
