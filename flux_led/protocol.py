@@ -1447,10 +1447,11 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         else:
             h = s = v = 0x00
 
-        if warm_white is not None:
-            white_temp = 0x00
-            white_brightness = int((warm_white / 255) * 100)
-        elif cool_white is not None:
+        if warm_white is not None and cool_white is not None:
+            # warm white comes through as 0, even when temp is set to 6500
+            white_brightness = round(((warm_white + cool_white) / (2 * 255)) * 64)
+            white_temp = round((cool_white / (warm_white + cool_white)) * 64)
+        elif cool_white is not None and warm_white is None:
             white_temp = 0x64
             white_brightness = int((cool_white / 255) * 100)
         else:

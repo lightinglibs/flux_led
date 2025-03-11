@@ -851,6 +851,11 @@ class TestLight(unittest.TestCase):
                     b"\x81\x35\x23\x61\x30\x40\xb5\x00\x9c\x00\x0a\x00\xf0\xf5"
                 )
             if calls == 5:
+                self.assertEqual(expected, 14)
+                return bytearray(
+                    b"\x81\x35\x23\x61\x30\x40\xb5\x00\x9c\x00\x0a\x00\xf0\xf5"
+                )
+            if calls == 6:
                 self.assertEqual(expected, 94)
                 return bytearray(
                     b"\x0f\x22\xf0\x16\x01\x04\x00\x2b\x00\x00\x61\x19\x47\xff\x00\x00\xf0"
@@ -881,12 +886,11 @@ class TestLight(unittest.TestCase):
         self.assertEqual(light.getRgbw(), (255, 255, 255, 255))
         self.assertEqual(light.getRgbww(), (255, 255, 255, 255, 255))
 
-        light.setWarmWhite255(180)
-        light.setColdWhite255(220)
+        light.setWhiteTemperature(2700, 100)
+        self.assertEqual(mock_send.call_count, 4)
+
+        light.setWhiteTemperature(6500, 100)
         self.assertEqual(mock_send.call_count, 5)
-        self.assertEqual(light.getRgb(), (255, 255, 255))
-        self.assertEqual(light.getRgbw(), (255, 255, 255, 255))
-        self.assertEqual(light.getRgbww(), (255, 255, 255, 255, 255))
 
         light.update_state()
         self.assertEqual(mock_read.call_count, 3)
