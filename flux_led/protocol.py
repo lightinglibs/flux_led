@@ -24,6 +24,7 @@ from .const import (
     TRANSITION_JUMP,
     TRANSITION_STROBE,
     LevelWriteMode,
+    LevelWriteModeData,
     MultiColorEffects,
 )
 from .timer import LedTimer
@@ -91,6 +92,7 @@ PROTOCOL_LEDENET_ADDRESSABLE_A3 = "LEDENET_ADDRESSABLE_A3"
 PROTOCOL_LEDENET_CCT = "LEDENET_CCT"
 PROTOCOL_LEDENET_CCT_WRAPPED = "LEDENET_CCT_WRAPPED"
 PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS = "LEDENET_CHRISTMAS"
+PROTOCOL_LEDENET_25BYTE = "LEDENET_25_BYTE"
 
 TRANSITION_BYTES = {
     TRANSITION_JUMP: 0x3B,
@@ -172,7 +174,7 @@ MSG_LENGTHS = {
 }
 
 OUTER_MESSAGE_WRAPPER_FIRST_BYTES = [OUTER_MESSAGE_FIRST_BYTE, 0xB1, 0xB2, 0xB3, 0x00]
-OUTER_MESSAGE_WRAPPER = [*OUTER_MESSAGE_WRAPPER_FIRST_BYTES, 0x01, 0x01]
+OUTER_MESSAGE_WRAPPER = [*OUTER_MESSAGE_WRAPPER_FIRST_BYTES, 0x01]
 OUTER_MESSAGE_WRAPPER_START_LEN = 10
 CHECKSUM_LEN = 1
 
@@ -408,6 +410,7 @@ class ProtocolBase:
     """The base protocol."""
 
     power_state_response_length = MSG_LENGTHS[MSG_POWER_STATE]
+    level_write_modes = LevelWriteModeData(ALL=0x00, COLORS=0xF0, WHITES=0x0F)
 
     def __init__(self) -> None:
         self._counter = -1
@@ -463,7 +466,8 @@ class ProtocolBase:
         return False
 
     def expected_response_length(self, data: bytes) -> int:
-        """Return the number of bytes expected in the response.
+        """
+        Return the number of bytes expected in the response.
 
         If the response is unknown, we assume the response is
         a complete message since we have no way of knowing otherwise.
@@ -641,7 +645,8 @@ class ProtocolBase:
     def construct_power_restore_state_change(
         self, restore_state: PowerRestoreStates
     ) -> bytearray:
-        """The bytes to send for a power restore state change.
+        """
+        The bytes to send for a power restore state change.
 
         Set power on state to keep last state
         31f0f0f0f0f0e1
@@ -684,7 +689,7 @@ class ProtocolBase:
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
 
@@ -736,7 +741,10 @@ class ProtocolBase:
         """Original protocol uses no checksum."""
 
     def construct_wrapped_message(
-        self, msg: bytearray, inner_pre_constructed: bool = False
+        self,
+        msg: bytearray,
+        inner_pre_constructed: bool = False,
+        version: int = 0x01,
     ) -> bytearray:
         """Construct a wrapped message."""
         inner_msg = msg if inner_pre_constructed else self.construct_message(msg)
@@ -745,6 +753,7 @@ class ProtocolBase:
             bytearray(
                 [
                     *OUTER_MESSAGE_WRAPPER,
+                    version,
                     self._increment_counter(),
                     inner_msg_len >> 8,
                     inner_msg_len & 0xFF,
@@ -819,6 +828,12 @@ class ProtocolBase:
             )
         )
 
+    def get_write_all_colors(self) -> set[int]:
+        return {self.level_write_modes.ALL, self.level_write_modes.COLORS}
+
+    def get_write_all_whites(self) -> set[int]:
+        return {self.level_write_modes.ALL, self.level_write_modes.WHITES}
+
 
 class ProtocolLEDENETOriginal(ProtocolBase):
     """The original LEDENET protocol with no checksums."""
@@ -866,7 +881,7 @@ class ProtocolLEDENETOriginal(ProtocolBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for original LEDENET protocol (w/o checksum at end)
@@ -908,7 +923,7 @@ class ProtocolLEDENETOriginalRGBW(ProtocolLEDENETOriginal):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for original LEDENET RGBW protocol (w/o checksum at end)
@@ -921,7 +936,9 @@ class ProtocolLEDENETOriginalRGBW(ProtocolLEDENETOriginal):
                         green or 0x00,
                         blue or 0x00,
                         warm_white or 0x00,
-                        write_mode.value,
+                        write_mode.value
+                        if isinstance(write_mode, LevelWriteMode)
+                        else write_mode,
                         0xAA,
                     ]
                 )
@@ -943,7 +960,7 @@ class ProtocolLEDENETOriginalCCT(ProtocolLEDENETOriginal):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for original LEDENET protocol (w/o checksum at end)
@@ -997,7 +1014,8 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         return self.is_checksum_correct(raw_state)
 
     def construct_state_change(self, turn_on: int) -> bytearray:
-        """The bytes to send for a state change request.
+        """
+        The bytes to send for a state change request.
 
         Alternate messages
 
@@ -1023,7 +1041,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for 8-byte protocols (w/ checksum at end)
@@ -1059,7 +1077,9 @@ class ProtocolLEDENET8Byte(ProtocolBase):
                         green or 0x00,
                         blue or 0x00,
                         warm_white or 0x00,
-                        write_mode.value,
+                        write_mode.value
+                        if isinstance(write_mode, LevelWriteMode)
+                        else write_mode,
                         0x0F,
                     ]
                 )
@@ -1089,7 +1109,8 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         foreground_color: tuple[int, int, int] | None = None,
         background_color: tuple[int, int, int] | None = None,
     ) -> list[bytearray]:
-        """The bytes to send for music mode.
+        """
+        The bytes to send for music mode.
 
         Known messages
         73 01 4d 0f d0
@@ -1135,7 +1156,8 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         music_pixels_per_segment: int | None,  # music pixels per segment
         music_segments: int | None,  # number of music segments
     ) -> bytearray:
-        """The bytes to send to change device config.
+        """
+        The bytes to send to change device config.
 
         RGBW 0x06
         62 06 02 0f 79 - RGB/W GRB W
@@ -1225,7 +1247,8 @@ class ProtocolLEDENET8ByteDimmableEffects(ProtocolLEDENET8ByteAutoOn):
         foreground_color: tuple[int, int, int] | None = None,
         background_color: tuple[int, int, int] | None = None,
     ) -> list[bytearray]:
-        """The bytes to send for music mode.
+        """
+        The bytes to send for music mode.
 
         Known messages
         73 01 4d 0f d0
@@ -1298,7 +1321,7 @@ class ProtocolLEDENET9Byte(ProtocolLEDENET8Byte):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
         # sample message for 9-byte LEDENET protocol (w/ checksum at end)
@@ -1324,7 +1347,9 @@ class ProtocolLEDENET9Byte(ProtocolLEDENET8Byte):
                         blue or 0x00,
                         warm_white or 0x00,
                         cool_white or 0x00,
-                        write_mode.value,
+                        write_mode.value
+                        if isinstance(write_mode, LevelWriteMode)
+                        else write_mode,
                         0x0F,
                     ]
                 )
@@ -1376,6 +1401,89 @@ class ProtocolLEDENET9ByteDimmableEffects(ProtocolLEDENET9ByteAutoOn):
         """The bytes to send for a preset pattern."""
         delay = utils.speedToDelay(speed)
         return self.construct_message(bytearray([0x38, pattern, delay, brightness]))
+
+
+class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
+    """25 byte protocol"""
+
+    level_write_modes = LevelWriteModeData(ALL=0x00, COLORS=0xA1, WHITES=0xB1)
+
+    @property
+    def name(self) -> str:
+        """The name of the protocol."""
+        return PROTOCOL_LEDENET_25BYTE
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode | int,
+    ) -> list[bytearray]:
+        """The bytes to send for a level change request."""
+        # sample message for 25-byte LEDENET protocol (w/ checksum at end)
+        #  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+        # b0 b1 b2 b3 00 01 02 79 00 0e e0 01 00 a1 78 64 64 00 00 00 00 14 00 00
+        #                    |  |              |  |  |  |  |  |  |              |
+        #                    |  |              |  |  |  |  |  |  |              footer
+        #                    |  |              |  |  |  |  |  |  white brightness
+        #                    |  |              |  |  |  |  |  white temperature (00 warm - 64 cool)
+        #                    |  |              |  |  |  |  value
+        #                    |  |              |  |  |  saturation
+        #                    |  |              |  |  hue / 2
+        #                    |  |              |  write mode (a1 color, b1 white)
+        #                    |  |              unknown filler
+        #                    |  increment counter
+        #                    header
+
+        if red is not None and green is not None and blue is not None:
+            h, s, v = colorsys.rgb_to_hsv(red / 255, green / 255, blue / 255)
+            h = int((h * 360) / 2)  # Hue needs to be halved
+            s = int(s * 100)
+            v = int(v * 100)
+        else:
+            h = s = v = 0x00
+
+        if warm_white is not None and cool_white is not None:
+            # warm white comes through as 0, even when temp is set to 6500
+            white_brightness = round(((warm_white + cool_white) / (2 * 255)) * 64)
+            white_temp = round((cool_white / (warm_white + cool_white)) * 64)
+        elif cool_white is not None and warm_white is None:
+            white_temp = 0x64
+            white_brightness = int((cool_white / 255) * 100)
+        else:
+            white_temp = 0x00
+            white_brightness = 0x00
+
+        return [
+            self.construct_wrapped_message(
+                bytearray(
+                    [
+                        0xE0,
+                        0x01,
+                        0x00,
+                        write_mode.value
+                        if isinstance(write_mode, LevelWriteMode)
+                        else write_mode,
+                        h,
+                        s,
+                        v,
+                        white_temp,
+                        white_brightness,
+                        0x00,
+                        0x00,
+                        0x14,
+                        0x00,
+                        0x00,
+                    ]
+                ),
+                inner_pre_constructed=True,
+                version=0x02,
+            )
+        ]
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
@@ -1485,7 +1593,8 @@ class ProtocolLEDENETAddressableA1(ProtocolLEDENETAddressableBase):
         music_pixels_per_segment: int | None,  # music pixels per segment
         music_segments: int | None,  # number of music segments
     ) -> bytearray:
-        """The bytes to send to change device config.
+        """
+        The bytes to send to change device config.
         pos  0  1  2  3  4  5  6  7  8  9 10 11 12
             62 04 00 04 00 00 00 00 00 00 02 f0 5c <- checksum
              |  |  |  |  |  |  |  |  |  |  |  |
@@ -1575,9 +1684,10 @@ class ProtocolLEDENETAddressableA2(ProtocolLEDENETAddressableBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
-        """The bytes to send for a level change request.
+        """
+        The bytes to send for a level change request.
 
         white  41 01 ff ff ff 00 00 00 60 ff 00 00 9e
         """
@@ -1617,7 +1727,8 @@ class ProtocolLEDENETAddressableA2(ProtocolLEDENETAddressableBase):
         foreground_color: tuple[int, int, int] | None = None,
         background_color: tuple[int, int, int] | None = None,
     ) -> list[bytearray]:
-        """The bytes to send for music mode.
+        """
+        The bytes to send for music mode.
 
         Known messages
         73 01 27 01 00 00 00 00 ff ff 64 64 62 - lowest brightness music
@@ -1740,7 +1851,8 @@ class ProtocolLEDENETAddressableA2(ProtocolLEDENETAddressableBase):
         music_pixels_per_segment: int | None,  # music pixels per segment
         music_segments: int | None,  # number of music segments
     ) -> bytearray:
-        """The bytes to send to change device config.
+        """
+        The bytes to send to change device config.
         pos  0  1  2  3  4  5  6  7  8  9 10
             62 01 2c 00 06 01 04 32 01 0f dc
              |  |  |  |  |  |  |  |  |  |  |
@@ -1935,7 +2047,8 @@ class ProtocolLEDENETAddressableA3(ProtocolLEDENETAddressableA2):
         foreground_color: tuple[int, int, int] | None = None,
         background_color: tuple[int, int, int] | None = None,
     ) -> list[bytearray]:
-        """The bytes to send for music mode.
+        """
+        The bytes to send for music mode.
 
         Known messages
         b0 b1 b2 b3 00 01 01 1f 00 0d 73 01 27 01 ff 00 00 ff 00 00 64 64 62 b8 - Music mode
@@ -1981,9 +2094,10 @@ class ProtocolLEDENETAddressableA3(ProtocolLEDENETAddressableA2):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
-        """The bytes to send for a level change request.
+        """
+        The bytes to send for a level change request.
 
         b0 [unknown static?] b1 [unknown static?] b2 [unknown static?] b3 [unknown static?] 00 [unknown static?] 01 [unknown static?] 01 [unknown static?] 6a [incrementing sequence number] 00 [unknown static?] 0d [unknown, sometimes 0c] 41 [unknown static?] 02 [preset number] ff [foreground r] 00 [foreground g] 00 [foreground b] 00 [background red] ff [background green] 00 [background blue] 06 [speed or direction?] 00 [unknown static?] 00 [unknown static?] 00 [unknown static?] 47 [speed or direction?] cd [check sum]
 
@@ -2038,7 +2152,8 @@ class ProtocolLEDENETAddressableA3(ProtocolLEDENETAddressableA2):
         speed: int,
         effect: MultiColorEffects,
     ) -> bytearray:
-        """The bytes to send for multiple zones.
+        """
+        The bytes to send for multiple zones.
 
         Blue/Green - Static
         590063ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff00000000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff001e04640024
@@ -2179,9 +2294,10 @@ class ProtocolLEDENETCCT(ProtocolLEDENET9Byte):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
-        """The bytes to send for a level change request.
+        """
+        The bytes to send for a level change request.
 
         b0 b1 b2 b3 00 01 01 52 00 09 35 b1 00 64 00 00 00 03 4d bd - 100% warm
         b0 b1 b2 b3 00 01 01 72 00 09 35 b1 64 64 00 00 00 03 b1 a5 - 100% cool
@@ -2250,9 +2366,10 @@ class ProtocolLEDENETCCTWrapped(ProtocolLEDENETCCT):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
-        """The bytes to send for a level change request.
+        """
+        The bytes to send for a level change request.
 
         b0 b1 b2 b3 00 01 01 52 00 09 35 b1 00 64 00 00 00 03 4d bd - 100% warm
         b0 b1 b2 b3 00 01 01 72 00 09 35 b1 64 64 00 00 00 03 b1 a5 - 100% cool
@@ -2316,7 +2433,8 @@ class ProtocolLEDENETAddressableChristmas(ProtocolLEDENETAddressableBase):
     def construct_preset_pattern(
         self, pattern: int, speed: int, brightness: int
     ) -> bytearray:
-        """The bytes to send for a preset pattern.
+        """
+        The bytes to send for a preset pattern.
         0xB0 0xB1 0xB2 0xB3 0x00 0x01 0x01 0x2A 0x00 0x04 0x38 0x01 0x10 0x00 0x3F (15)
         0xB0 0xB1 0xB2 0xB3 0x00 0x01 0x01 0x2B 0x00 0x04 0x38 0x02 0x10 0x00 0x41 (15)
         0xB0 0xB1 0xB2 0xB3 0x00 0x01 0x01 0x2C 0x00 0x04 0x38 0x03 0x10 0x00 0x43 (15)
@@ -2342,9 +2460,10 @@ class ProtocolLEDENETAddressableChristmas(ProtocolLEDENETAddressableBase):
         blue: int | None,
         warm_white: int | None,
         cool_white: int | None,
-        write_mode: LevelWriteMode,
+        write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
-        """The bytes to send for a level change request.
+        """
+        The bytes to send for a level change request.
 
         Green 100%:
         b0b1b2b300010180000d3ba100646400000000000000a49d
@@ -2425,7 +2544,8 @@ class ProtocolLEDENETAddressableChristmas(ProtocolLEDENETAddressableBase):
         speed: int,
         effect: MultiColorEffects,
     ) -> bytearray:
-        """The bytes to send for multiple zones.
+        """
+        The bytes to send for multiple zones.
 
         6 Zone All red
         a000060001ff00000000ff0002ff00000000ff0003ff00000000ff0004ff00000000ff0005ff00000000ff0006ff00000000ffaf

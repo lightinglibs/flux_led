@@ -29,6 +29,7 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_9BYTE_AUTO_ON,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS,
+    PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
     PROTOCOL_LEDENET_ADDRESSABLE_A2,
     PROTOCOL_LEDENET_ADDRESSABLE_A3,
@@ -823,6 +824,78 @@ class TestLight(unittest.TestCase):
         light.sendTimers(timers)
         self.assertEqual(mock_read.call_count, 6)
         self.assertEqual(mock_send.call_count, 8)
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_rgbww_controller_version_10(self, mock_connect, mock_read, mock_send):
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\x81\x35")
+            if calls == 2:
+                self.assertEqual(expected, 12)
+                return bytearray(b"\x23\x61\x30\x40\xb5\x00\x9c\x00\x0a\x00\xf0\xf5")
+            if calls == 3:
+                self.assertEqual(expected, 14)
+                return bytearray(
+                    b"\x81\x35\x23\x61\x30\x40\xb5\x00\x9c\x00\x0a\x00\xf0\xf5"
+                )
+            if calls == 4:
+                self.assertEqual(expected, 14)
+                return bytearray(
+                    b"\x81\x35\x23\x61\x30\x40\xb5\x00\x9c\x00\x0a\x00\xf0\xf5"
+                )
+            if calls == 5:
+                self.assertEqual(expected, 14)
+                return bytearray(
+                    b"\x81\x35\x23\x61\x30\x40\xb5\x00\x9c\x00\x0a\x00\xf0\xf5"
+                )
+            if calls == 6:
+                self.assertEqual(expected, 94)
+                return bytearray(
+                    b"\x0f\x22\xf0\x16\x01\x04\x00\x2b\x00\x00\x61\x19\x47\xff\x00\x00\xf0"
+                    b"\xf0\x16\x01\x04\x04\x2c\x00\x00\x61\x7f\xff\x00\x00\x00\xf0\xf0\x16"
+                    b"\x01\x03\x16\x1f\x00\x00\x61\xff\x00\x00\x00\x00\xf0\xf0\x16\x01\x03"
+                    b"\x17\x13\x00\x00\x61\x81\x81\x81\x00\x00\xf0\xf0\x16\x01\x03\x17\x28"
+                    b"\x00\x00\x61\x00\xff\x00\x00\x00\xf0\xf0\x16\x01\x04\x07\x2c\x00\x00"
+                    b"\x61\x21\x00\xff\x00\x00\xf0\x00\x00"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_25BYTE)
+        self.assertEqual(light.model_num, 0x35)
+        self.assertEqual(light.version_num, 10)
+
+        light.setRgb(255, 100, 50)
+        self.assertEqual(mock_send.call_count, 2)
+        self.assertEqual(light.getRgb(), (255, 100, 50))
+        self.assertEqual(light.getRgbw(), (255, 100, 50, 0))
+        self.assertEqual(light.getRgbww(), (255, 100, 50, 0, 0))
+
+        light.setColdWhite255(200)
+        self.assertEqual(mock_send.call_count, 3)
+        self.assertEqual(light.getRgb(), (255, 255, 255))
+        self.assertEqual(light.getRgbw(), (255, 255, 255, 255))
+        self.assertEqual(light.getRgbww(), (255, 255, 255, 255, 255))
+
+        light.setWhiteTemperature(2700, 100)
+        self.assertEqual(mock_send.call_count, 4)
+
+        light.setWhiteTemperature(6500, 100)
+        self.assertEqual(mock_send.call_count, 5)
+
+        light.update_state()
+        self.assertEqual(mock_read.call_count, 3)
+        self.assertEqual(mock_send.call_count, 6)
+        self.assertEqual(mock_send.call_args, mock.call(bytearray(LEDENET_STATE_QUERY)))
 
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
