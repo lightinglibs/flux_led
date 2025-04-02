@@ -1462,8 +1462,8 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
         # Convert HSV to RGB
         h = (hue * 2) / 360
-        s = saturation / 100
-        v = value / 100
+        s = saturation / 255
+        v = value / 255
         r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
         red = min(int(r_f * 255), 255)
         green = min(int(g_f * 255), 255)
