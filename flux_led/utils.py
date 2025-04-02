@@ -49,12 +49,12 @@ class utils:
 
         # try to convert from an english name
         with contextlib.suppress(Exception):
-            return cast(tuple[int, int, int], webcolors.name_to_rgb(color))
+            return cast("tuple[int, int, int]", webcolors.name_to_rgb(color))
 
         # try to convert an web hex code
         with contextlib.suppress(Exception):
             return cast(
-                tuple[int, int, int],
+                "tuple[int, int, int]",
                 webcolors.hex_to_rgb(webcolors.normalize_hex(color)),
             )
 
@@ -71,7 +71,7 @@ class utils:
     def color_tuple_to_string(rgb: tuple[int, int, int]) -> str:
         # try to convert to an english name
         with contextlib.suppress(Exception):
-            return cast(str, webcolors.rgb_to_name(rgb))
+            return cast("str", webcolors.rgb_to_name(rgb))
         return str(rgb)
 
     @staticmethod

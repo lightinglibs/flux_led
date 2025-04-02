@@ -46,6 +46,6 @@ def _socket_retry(attempts: int = DEFAULT_RETRIES) -> WrapFuncType:  # type: ign
                     raise
             # unreachable
 
-        return cast(WrapFuncType, _retry_wrap)
+        return cast("WrapFuncType", _retry_wrap)
 
-    return cast(WrapFuncType, decorator_retry)
+    return cast("WrapFuncType", decorator_retry)
