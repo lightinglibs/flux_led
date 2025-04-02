@@ -1426,56 +1426,56 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
     def extended_state_to_state(self, raw_state: bytes) -> bytes:
         """Convert an extended state response to a state response."""
-        # sample inner extended state for 25-byte LEDENET protocol (w/ checksum at end)
-        # 0xEA 0x81 0x01 0x00 0x35 0x0A 0x23 0x61 0x24 0x0A 0xF0 0x3C 0x64 0x64 0x00 0x00 0x00 0x00 0x00 0x00
-        #  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19
-        # EA 81 01 00 35 0A 23 61 24 0A F0 3C 64 64 00 00 00 00 00 00
-        #  |  |              |  |  |  |  |  |  |  |            |
-        #  |  |              |  |  |  |  |  |  |  |            footer
-        #  |  |              |  |  |  |  |  |  |  value
-        #  |  |              |  |  |  |  |  |  saturation (but sometimes too large?)
-        #  |  |              |  |  |  |  |  hue / 2
-        #  |  |              |  |  |  |  unknown
-        #  |  |              |  |  |  speed ?
-        #  |  |              |  |  unknown
-        #  |  |              |  preset pattern
-        #  |  |              power state
-        #  |  |
-        #  |  header
-        #  header
-        # TODO: remove temp logging
-        _LOGGER.warning(
-            "Extended raw state: %s", " ".join(f"0x{x:02X}" for x in raw_state)
-        )
-        head = raw_state[1]
+        # pos  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19
+        #     EA  81  ??  ??  35  0A  23  61  ??  05  0F  3C  64  00  00  64  64  00  00  00
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Reserved
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Cool white (2B)
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Warm white (2B)
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Value (brightness)
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   Saturation
+        #      |   |   |   |   |   |   |   |   |   |   |   |   Hue (0–180)
+        #      |   |   |   |   |   |   |   |   |   |   Speed
+        #      |   |   |   |   |   |   |   Preset pattern
+        #      |   |   |   |   |   Power state (0x23 = ON, 0x24 = OFF)
+        #      |   |   |   |   Version number
+        #      |   |   |   Model number
+        #      |   |   Unknown / reserved
+        #      |   Unknown / reserved
+        #   Extended message header (ea 81)
+
+        if len(raw_state) < 20:
+            return b""
+
         model_num = raw_state[4]
         version_number = raw_state[5]
         power_state = raw_state[6]
         preset_pattern = raw_state[7]
         speed = raw_state[9]
 
-        hue = raw_state[11]
-        saturation = raw_state[12]  # might need a mask?
-        value = raw_state[13]
-        _LOGGER.warning("hue: %s, saturation: %s, value: %s", hue, saturation, value)
-        _LOGGER.warning(
-            "H: %s, S: %s, V: %s", hue / 360 * 2, saturation / 100, value / 100
-        )
-        red_float, green_float, blue_float = colorsys.hsv_to_rgb(
-            hue * 2 / 360, saturation / 100, value / 100
-        )
-        _LOGGER.warning("RGB float: %s, %s, %s", red_float, green_float, blue_float)
-        red = min(int(red_float * 255), 256)
-        green = min(int(green_float * 255), 256)
-        blue = min(int(blue_float * 255), 256)
-        _LOGGER.warning("RGB: %s, %s, %s", red, green, blue)
+        hue = raw_state[10]
+        saturation = raw_state[11]
+        value = raw_state[12]
+
+        warm_white = int.from_bytes(raw_state[13:15], "big")
+        cool_white = int.from_bytes(raw_state[15:17], "big")
+
+        # Convert HSV to RGB
+        h = (hue * 2) / 360
+        s = saturation / 100
+        v = value / 100
+        r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
+        red = min(int(r_f * 255), 255)
+        green = min(int(g_f * 255), 255)
+        blue = min(int(b_f * 255), 255)
+
+        # Fill standard state structure
         mode = 0
         color_mode = 0
-        warm_white = 0
-        cool_white = 0
-        check_sum = 0
-        converted = (
-            head,
+        check_sum = 0  # Set to 0; not critical
+
+        return bytes((
+            raw_state[1],       # Head (second byte of EA 81)
             model_num,
             power_state,
             preset_pattern,
@@ -1489,11 +1489,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
             cool_white,
             color_mode,
             check_sum,
-        )
-        _LOGGER.warning("converted raw state: %s", converted)
-
-        # LEDENETRawState(head=0, model_num=53, power_state=10, preset_pattern=35, mode=97, speed=1, red=79, green=15, blue=0, warm_white=0, version_number=0, cool_white=100, color_mode=100, check_sum=0)
-        return bytes(converted)
+        ))
 
     def construct_levels_change(
         self,
