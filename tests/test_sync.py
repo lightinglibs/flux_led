@@ -2583,23 +2583,31 @@ class TestProtocolLEDENET25Byte(unittest.TestCase):
 
         proto = ProtocolLEDENET25Byte()
 
-
         # Simulated extended state response payload (starts with EA 81)
-        raw_state = bytes([
-            0xEA, 0x81, 0x00, 0x00,  # header + padding
-            0x35,  # model
-            0x0A,  # version
-            0x23,  # power
-            0x61,  # preset
-            0x00,  # unknown
-            0x05,  # speed
-            0x0F,  # hue
-            0x64,  # saturation
-            0x64,  # value
-            0x00, 0x32,  # warm white (50%)
-            0x00, 0x64,  # cool white (100%)
-            0x00, 0x00, 0x00  # padding
-        ])
+        raw_state = bytes(
+            [
+                0xEA,
+                0x81,
+                0x00,
+                0x00,  # header + padding
+                0x35,  # model
+                0x0A,  # version
+                0x23,  # power
+                0x61,  # preset
+                0x00,  # unknown
+                0x05,  # speed
+                0x0F,  # hue
+                0x64,  # saturation
+                0x64,  # value
+                0x00,
+                0x32,  # warm white (50%)
+                0x00,
+                0x64,  # cool white (100%)
+                0x00,
+                0x00,
+                0x00,  # padding
+            ]
+        )
 
         assert proto.is_valid_extended_state_response(raw_state) is True
 
@@ -2609,11 +2617,11 @@ class TestProtocolLEDENET25Byte(unittest.TestCase):
         # Validate fields
         assert state[2] == 0x23  # power
         assert state[3] == 0x61  # preset
-        assert state[9] == 50    # warm white
+        assert state[9] == 50  # warm white
         assert state[11] == 100  # cool white
 
     def test_extended_state_too_short(self):
         from flux_led.protocol import ProtocolLEDENET25Byte
 
         proto = ProtocolLEDENET25Byte()
-        assert proto.extended_state_to_state(b'\xEA\x81') == b""
+        assert proto.extended_state_to_state(b"\xea\x81") == b""

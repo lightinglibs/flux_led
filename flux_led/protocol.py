@@ -1474,22 +1474,24 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         color_mode = 0
         check_sum = 0  # Set to 0; not critical
 
-        return bytes((
-            raw_state[1],       # Head (second byte of EA 81)
-            model_num,
-            power_state,
-            preset_pattern,
-            mode,
-            speed,
-            red,
-            green,
-            blue,
-            warm_white,
-            version_number,
-            cool_white,
-            color_mode,
-            check_sum,
-        ))
+        return bytes(
+            (
+                raw_state[1],  # Head (second byte of EA 81)
+                model_num,
+                power_state,
+                preset_pattern,
+                mode,
+                speed,
+                red,
+                green,
+                blue,
+                warm_white,
+                version_number,
+                cool_white,
+                color_mode,
+                check_sum,
+            )
+        )
 
     def construct_levels_change(
         self,
