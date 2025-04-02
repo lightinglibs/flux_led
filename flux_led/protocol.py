@@ -1434,7 +1434,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Warm white (2B)
         #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Value (brightness)
         #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   Saturation
-        #      |   |   |   |   |   |   |   |   |   |   |   |   Hue / 2 (0–180)
+        #      |   |   |   |   |   |   |   |   |   |   |   |   Hue / 2 (0-180)
         #      |   |   |   |   |   |   |   |   |   |   Speed
         #      |   |   |   |   |   |   |   Preset pattern
         #      |   |   |   |   |   Power state (0x23 = ON, 0x24 = OFF)
