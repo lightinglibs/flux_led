@@ -28,7 +28,7 @@ class AIOLEDENETProtocol(asyncio.Protocol):
 
     def connection_made(self, transport: BaseTransport) -> None:
         """Handle connection made."""
-        self.transport = cast(WriteTransport, transport)
+        self.transport = cast("WriteTransport", transport)
         self.peername = transport.get_extra_info("peername")
 
     def write(self, data: bytes) -> None:

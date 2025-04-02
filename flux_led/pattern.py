@@ -686,5 +686,5 @@ class PresetPattern:
             return EFFECT_MAP_DIMMABLE[effect]
         mapped_effect = effect.replace(" ", "_").lower()
         if hasattr(PresetPattern, mapped_effect):
-            return cast(int, getattr(PresetPattern, mapped_effect))
+            return cast("int", getattr(PresetPattern, mapped_effect))
         raise ValueError(f"{effect} is not a known effect name.")
