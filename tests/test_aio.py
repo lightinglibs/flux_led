@@ -40,10 +40,10 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_ORIGINAL,
     PowerRestoreState,
     PowerRestoreStates,
+    ProtocolLEDENET25Byte,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
     RemoteConfig,
-    ProtocolLEDENET25Byte,
 )
 from flux_led.scanner import (
     FluxLEDDiscovery,
@@ -3803,6 +3803,7 @@ async def test_not_armacost():
     light.discovery = discovery
     assert light.port == 5577
 
+
 @pytest.mark.asyncio
 def test_extended_state_to_state():
     proto = ProtocolLEDENET25Byte()
@@ -3844,6 +3845,7 @@ def test_extended_state_to_state():
     assert state[9] == 50  # warm white
     assert state[11] == 100  # cool white
 
+
 @pytest.mark.asyncio
 def test_extended_state_too_short():
     proto = ProtocolLEDENET25Byte()
@@ -3854,28 +3856,48 @@ def test_extended_state_too_short():
 @pytest.mark.parametrize(
     "label,hue_byte,sat_byte,val_byte,expected_rgb",
     [
-        ("red",    0x00, 255, 255, (255, 0, 0)),
+        ("red", 0x00, 255, 255, (255, 0, 0)),
         ("yellow", 0x1E, 255, 255, (255, 255, 0)),
-        ("green",  0x3C, 255, 255, (0, 255, 0)),
-        ("blue",   0x78, 255, 255, (0, 0, 255)),
-    ]
+        ("green", 0x3C, 255, 255, (0, 255, 0)),
+        ("blue", 0x78, 255, 255, (0, 0, 255)),
+    ],
 )
-async def test_extended_state_color_parsing(label, hue_byte, sat_byte, val_byte, expected_rgb):
+async def test_extended_state_color_parsing(
+    label, hue_byte, sat_byte, val_byte, expected_rgb
+):
     proto = ProtocolLEDENET25Byte()
 
-    print(f"values → hue: {hue_byte} ({type(hue_byte)}), sat: {sat_byte} ({type(sat_byte)}), val: {val_byte} ({type(val_byte)})")
+    print(
+        f"values → hue: {hue_byte} ({type(hue_byte)}), sat: {sat_byte} ({type(sat_byte)}), val: {val_byte} ({type(val_byte)})"
+    )
 
-    raw_state = bytes([
-        0xEA, 0x81, 0x00, 0x00,
-        0x35, 0x0A, 0x23, 0x61, 0x00, 0x05,
-        hue_byte,
-        sat_byte,
-        val_byte,
-        0x00, 0x00,  # warm
-        0x00, 0x00,  # cool
-        0x00, 0x00, 0x00,
-    ])
+    raw_state = bytes(
+        [
+            0xEA,
+            0x81,
+            0x00,
+            0x00,
+            0x35,
+            0x0A,
+            0x23,
+            0x61,
+            0x00,
+            0x05,
+            hue_byte,
+            sat_byte,
+            val_byte,
+            0x00,
+            0x00,  # warm
+            0x00,
+            0x00,  # cool
+            0x00,
+            0x00,
+            0x00,
+        ]
+    )
 
     result = proto.extended_state_to_state(raw_state)
     rgb = tuple(result[6:9])
-    assert all(abs(a - b) <= 1 for a, b in zip(rgb, expected_rgb)), f"{label} RGB mismatch: got {rgb}, expected {expected_rgb}"
+    assert all(abs(a - b) <= 1 for a, b in zip(rgb, expected_rgb)), (
+        f"{label} RGB mismatch: got {rgb}, expected {expected_rgb}"
+    )
