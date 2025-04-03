@@ -1079,7 +1079,7 @@ class LEDENETDevice:
     @property
     def speed(self) -> int:
         assert self.raw_state is not None
-        if self.protocol in ADDRESSABLE_PROTOCOLS:
+        if self._protocol is not None and not self._protocol.speed_is_delay:
             return self.raw_state.speed
         if self.protocol in CHRISTMAS_EFFECTS_PROTOCOLS:
             return utils.delayToSpeed(self.raw_state.green)
