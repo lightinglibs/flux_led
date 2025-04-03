@@ -28,7 +28,11 @@ from .const import (
     MultiColorEffects,
 )
 from .timer import LedTimer
-from .utils import utils, white_levels_to_scaled_color_temp
+from .utils import (
+    scaled_color_temp_to_white_levels,
+    utils,
+    white_levels_to_scaled_color_temp,
+)
 
 
 class RemoteConfig(Enum):
@@ -1457,8 +1461,12 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         saturation = raw_state[11]
         value = raw_state[12]
 
-        cool_white = round((raw_state[14] / 100) * 255)
-        warm_white = round((raw_state[15] / 100) * 255)
+        white_temp = raw_state[14]
+        white_brightness = raw_state[15]
+        levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
+
+        cool_white = levels.cool_white
+        warm_white = levels.warm_white
 
         # Convert HSV to RGB
         h = (hue * 2) / 360
