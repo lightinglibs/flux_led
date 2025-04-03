@@ -4143,6 +4143,53 @@ def test_extended_state_to_state_full_purple():
     assert raw_state.cool_white == 0  # cool white
 
 
+def test_extended_state_to_state_full_speed_effect():
+    proto = ProtocolLEDENET25Byte()
+
+    # Simulated extended state response payload (starts with EA 81)
+    raw_state = bytes(
+        (
+            0xEA,
+            0x81,
+            0x01,
+            0x00,
+            0x35,
+            0x0A,
+            0x23,
+            0x25,
+            0x00,
+            0x64,
+            0xF0,
+            0x0B,
+            0xE4,
+            0x64,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x56,
+        )
+    )
+
+    assert proto.is_valid_extended_state_response(raw_state) is True
+
+    state = proto.extended_state_to_state(raw_state)
+    assert len(state) == 14
+
+    raw_state = LEDENETRawState(*state)
+
+    # Validate fields
+    assert raw_state.power_state == 0x23  # power
+    assert raw_state.preset_pattern == 0x25  # preset
+    assert raw_state.red == 255  # red
+    assert raw_state.green == 0  # green
+    assert raw_state.blue == 0  # blue
+    assert raw_state.warm_white == 0  # warm white
+    assert raw_state.cool_white == 0  # cool white
+
+
 def test_extended_state_too_short():
     proto = ProtocolLEDENET25Byte()
     assert proto.extended_state_to_state(b"\xea\x81") == b""

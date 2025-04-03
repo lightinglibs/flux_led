@@ -1473,9 +1473,9 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         s = saturation / 100
         v = value / 100
         r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
-        red = min(int(r_f * 255), 255)
-        green = min(int(g_f * 255), 255)
-        blue = min(int(b_f * 255), 255)
+        red = min(int(max(0, r_f) * 255), 255)
+        green = min(int(max(0, g_f) * 255), 255)
+        blue = min(int(max(0, b_f) * 255), 255)
 
         # Fill standard state structure
         mode = 0
