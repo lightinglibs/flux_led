@@ -1457,9 +1457,9 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         preset_pattern = raw_state[7]
         speed = raw_state[9]
 
-        hue = raw_state[10]
-        saturation = raw_state[11]
-        value = raw_state[12]
+        hue = raw_state[11]
+        saturation = raw_state[12]
+        value = raw_state[13]
 
         white_temp = raw_state[14]
         white_brightness = raw_state[15]
@@ -1470,8 +1470,8 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
         # Convert HSV to RGB
         h = (hue * 2) / 360
-        s = saturation / 255
-        v = value / 255
+        s = saturation / 100
+        v = value / 100
         r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
         red = min(int(r_f * 255), 255)
         green = min(int(g_f * 255), 255)
