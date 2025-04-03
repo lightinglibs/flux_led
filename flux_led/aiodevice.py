@@ -428,6 +428,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         if effect == EFFECT_RANDOM:
             await self.async_set_random()
             return
+        brightness = min(100, max(0, brightness))
         if effect == EFFECT_MUSIC:
             await self.async_set_music_mode(brightness=brightness)
             return

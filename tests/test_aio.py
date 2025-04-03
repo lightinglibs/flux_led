@@ -936,6 +936,15 @@ async def test_async_set_effect(mock_aio_protocol, caplog: pytest.LogCaptureFixt
     counter_byte = transport.mock_calls[0][1][0][7]
     assert counter_byte == 0
 
+    transport.reset_mock()
+    # Verify brightness clamped
+    await light.async_set_effect("RBM 1", 50, brightness=500)
+    assert transport.mock_calls[0][0] == "write"
+    assert (
+        transport.mock_calls[0][1][0]
+        == b"\xb0\xb1\xb2\xb3\x00\x01\x01\x01\x00\x05B\x012d\xd9\x80"
+    )
+
 
 @pytest.mark.asyncio
 async def test_SK6812RGBW(mock_aio_protocol, caplog: pytest.LogCaptureFixture):
