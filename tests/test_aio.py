@@ -3892,6 +3892,50 @@ def test_extended_state_to_state_full_cool_white():
     assert raw_state.cool_white == 255  # cool white
 
 
+def test_extended_state_to_state_full_warm_white():
+    proto = ProtocolLEDENET25Byte()
+
+    # Simulated extended state response payload (starts with EA 81)
+    raw_state = bytes(
+        (
+            0xEA,
+            0x81,
+            0x01,
+            0x00,
+            0x35,
+            0x0A,
+            0x23,
+            0x61,
+            0x00,
+            0x0A,
+            0x0F,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x64,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x94,
+        )
+    )
+
+    assert proto.is_valid_extended_state_response(raw_state) is True
+
+    state = proto.extended_state_to_state(raw_state)
+    assert len(state) == 14
+
+    raw_state = LEDENETRawState(*state)
+
+    # Validate fields
+    assert raw_state.power_state == 0x23  # power
+    assert raw_state.preset_pattern == 0x61  # preset
+    assert raw_state.warm_white == 255  # warm white
+    assert raw_state.cool_white == 0  # cool white
+
+
 @pytest.mark.asyncio
 def test_extended_state_too_short():
     proto = ProtocolLEDENET25Byte()
