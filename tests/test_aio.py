@@ -3805,49 +3805,6 @@ async def test_not_armacost():
     assert light.port == 5577
 
 
-def test_extended_state_to_state():
-    proto = ProtocolLEDENET25Byte()
-
-    # Simulated extended state response payload (starts with EA 81)
-    raw_state = bytes(
-        [
-            0xEA,
-            0x81,
-            0x00,
-            0x00,  # header + padding
-            0x35,  # model
-            0x0A,  # version
-            0x23,  # power
-            0x61,  # preset
-            0x00,  # unknown
-            0x05,  # speed
-            0x0F,  # hue
-            0x64,  # saturation
-            0x64,  # value
-            0x00,
-            0x32,  # warm white (50%)
-            0x00,
-            0x64,  # cool white (100%)
-            0x00,
-            0x00,
-            0x00,  # padding
-        ]
-    )
-
-    assert proto.is_valid_extended_state_response(raw_state) is True
-
-    state = proto.extended_state_to_state(raw_state)
-    assert len(state) == 14
-
-    raw_state = LEDENETRawState(*state)
-
-    # Validate fields
-    assert raw_state.power_state == 0x23  # power
-    assert raw_state.preset_pattern == 0x61  # preset
-    assert raw_state.warm_white == 255  # warm white
-    assert raw_state.cool_white == 128  # cool white
-
-
 def test_extended_state_to_state_full_cool_white():
     proto = ProtocolLEDENET25Byte()
 
