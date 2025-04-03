@@ -4143,10 +4143,10 @@ def test_extended_state_too_short():
 @pytest.mark.parametrize(
     "label,hue_byte,sat_byte,val_byte,expected_rgb",
     [
-        ("red", 0x00, 255, 255, (255, 0, 0)),
-        ("yellow", 0x1E, 255, 255, (255, 255, 0)),
-        ("green", 0x3C, 255, 255, (0, 255, 0)),
-        ("blue", 0x78, 255, 255, (0, 0, 255)),
+        ("red", 0x00, 100, 100, (255, 0, 0)),
+        ("yellow", 0x1E, 100, 100, (255, 255, 0)),
+        ("green", 0x3C, 100, 100, (0, 255, 0)),
+        ("blue", 0x78, 100, 100, (0, 0, 255)),
     ],
 )
 async def test_extended_state_color_parsing(
@@ -4162,24 +4162,25 @@ async def test_extended_state_color_parsing(
         [
             0xEA,
             0x81,
-            0x00,
+            0x01,
             0x00,
             0x35,
             0x0A,
             0x23,
             0x61,
             0x00,
-            0x05,
+            0x0A,
+            0xF0,
             hue_byte,
             sat_byte,
             val_byte,
             0x00,
-            0x00,  # warm
-            0x00,
-            0x00,  # cool
             0x00,
             0x00,
             0x00,
+            0x00,
+            0x00,
+            0x7A,
         ]
     )
 
