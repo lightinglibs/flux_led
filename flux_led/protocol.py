@@ -417,6 +417,11 @@ class ProtocolBase:
         super().__init__()
 
     @property
+    def speed_is_delay(self) -> bool:
+        """If True the speed is a delay."""
+        return True
+
+    @property
     def requires_turn_on(self) -> bool:
         """If True the device must be turned on before setting level/patterns/modes."""
         return True
@@ -1409,6 +1414,11 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
     level_write_modes = LevelWriteModeData(ALL=0x00, COLORS=0xA1, WHITES=0xB1)
 
     @property
+    def speed_is_delay(self) -> bool:
+        """If True the speed is a delay."""
+        return False
+
+    @property
     def name(self) -> str:
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
@@ -1498,6 +1508,11 @@ class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
     def timer_len(self) -> int:
         """Return a single timer len."""
         return 14
+
+    @property
+    def speed_is_delay(self) -> bool:
+        """If True the speed is a delay."""
+        return False
 
 
 class ProtocolLEDENETAddressableA1(ProtocolLEDENETAddressableBase):
@@ -2386,6 +2401,11 @@ class ProtocolLEDENETCCTWrapped(ProtocolLEDENETCCT):
 
 
 class ProtocolLEDENETAddressableChristmas(ProtocolLEDENETAddressableBase):
+    @property
+    def speed_is_delay(self) -> bool:
+        """If True the speed is a delay in ms."""
+        return True
+
     def construct_state_query(self) -> bytearray:
         """The bytes to send for a query request."""
         return self.construct_wrapped_message(

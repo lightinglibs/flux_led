@@ -873,6 +873,7 @@ class TestLight(unittest.TestCase):
         self.assertEqual(light.protocol, PROTOCOL_LEDENET_25BYTE)
         self.assertEqual(light.model_num, 0x35)
         self.assertEqual(light.version_num, 10)
+        self.assertEqual(light.speed, 64)
 
         light.setRgb(255, 100, 50)
         self.assertEqual(mock_send.call_count, 2)
