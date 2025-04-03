@@ -38,6 +38,7 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_ORIGINAL,
+    LEDENETRawState,
     PowerRestoreState,
     PowerRestoreStates,
     ProtocolLEDENET25Byte,
@@ -3804,7 +3805,6 @@ async def test_not_armacost():
     assert light.port == 5577
 
 
-@pytest.mark.asyncio
 def test_extended_state_to_state():
     proto = ProtocolLEDENET25Byte()
 
@@ -3839,11 +3839,57 @@ def test_extended_state_to_state():
     state = proto.extended_state_to_state(raw_state)
     assert len(state) == 14
 
+    raw_state = LEDENETRawState(*state)
+
     # Validate fields
-    assert state[2] == 0x23  # power
-    assert state[3] == 0x61  # preset
-    assert state[9] == 128  # warm white
-    assert state[11] == 255  # cool white
+    assert raw_state.power_state == 0x23  # power
+    assert raw_state.preset_pattern == 0x61  # preset
+    assert raw_state.warm_white == 255  # warm white
+    assert raw_state.cool_white == 128  # cool white
+
+
+def test_extended_state_to_state_full_cool_white():
+    proto = ProtocolLEDENET25Byte()
+
+    # Simulated extended state response payload (starts with EA 81)
+    raw_state = bytes(
+        (
+            0xEA,
+            0x81,
+            0x01,
+            0x00,
+            0x35,
+            0x0A,
+            0x23,
+            0x61,
+            0x00,
+            0x0A,
+            0x0F,
+            0x00,
+            0x00,
+            0x00,
+            0x64,
+            0x64,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0xF5,
+        )
+    )
+
+    assert proto.is_valid_extended_state_response(raw_state) is True
+
+    state = proto.extended_state_to_state(raw_state)
+    assert len(state) == 14
+
+    raw_state = LEDENETRawState(*state)
+
+    # Validate fields
+    assert raw_state.power_state == 0x23  # power
+    assert raw_state.preset_pattern == 0x61  # preset
+    assert raw_state.warm_white == 0  # warm white
+    assert raw_state.cool_white == 255  # cool white
 
 
 @pytest.mark.asyncio

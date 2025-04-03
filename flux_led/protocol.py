@@ -1457,8 +1457,8 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         saturation = raw_state[11]
         value = raw_state[12]
 
-        warm_white = round((raw_state[14] / 100) * 255)
-        cool_white = round((raw_state[16] / 100) * 255)
+        cool_white = round((raw_state[14] / 100) * 255)
+        warm_white = round((raw_state[16] / 100) * 255)
 
         # Convert HSV to RGB
         h = (hue * 2) / 360
