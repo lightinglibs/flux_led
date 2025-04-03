@@ -3842,8 +3842,8 @@ def test_extended_state_to_state():
     # Validate fields
     assert state[2] == 0x23  # power
     assert state[3] == 0x61  # preset
-    assert state[9] == 50  # warm white
-    assert state[11] == 100  # cool white
+    assert state[9] == 128  # warm white
+    assert state[11] == 255  # cool white
 
 
 @pytest.mark.asyncio
