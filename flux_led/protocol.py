@@ -1441,17 +1441,23 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
     def extended_state_to_state(self, raw_state: bytes) -> bytes:
         """Convert an extended state response to a state response."""
         # pos  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19
-        #     EA  81  ??  ??  35  0A  23  61  ??  05  0F  3C  64  00  00  64  64  00  00  00
+        #     EA  81  01  10  35  0A  23  61  01  50  0F  3C  64  64  00  64  00  00  00  00
         #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |
-        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Reserved
-        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Cool white (2B)
-        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Warm white (2B)
-        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   Value (brightness)
-        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   Saturation
-        #      |   |   |   |   |   |   |   |   |   |   |   |   Hue / 2 (0-180)
-        #      |   |   |   |   |   |   |   |   |   |   Speed
-        #      |   |   |   |   |   |   |   Preset pattern
-        #      |   |   |   |   |   Power state (0x23 = ON, 0x24 = OFF)
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   White brightness
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   White temperature
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   Value
+        #      |   |   |   |   |   |   |   |   |   |   |   |   Saturation
+        #      |   |   |   |   |   |   |   |   |   |   |   Hue / 2 (0-180)
+        #      |   |   |   |   |   |   |   |   |   |   0f white / f0 rgb
+        #      |   |   |   |   |   |   |   |   |   Speed?
+        #      |   |   |   |   |   |   |   |   w 01 / rgb 00
+        #      |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   Power state (0x23 = ON, 0x24 = OFF)
+        #      |   |   |   |   |   ??
         #      |   |   |   |   Version number
         #      |   |   |   Model number
         #      |   |   Unknown / reserved
