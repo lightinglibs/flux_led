@@ -1558,14 +1558,12 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         ):
             white_temp = white_brightness = 0
         else:
-            # warm_white, cool_white is scaled 0-255
-            white_temp, white_brightness = white_levels_to_scaled_color_temp(
-                warm_white, cool_white
-            )
-            # white_temp, white_brightness is scaled 0-255
-            # Convert to 0-100 since the protocol uses 0-100
-            white_temp = round(white_temp * 100 / 255)
-            white_brightness = round(white_brightness * 100 / 255)
+            total = warm_white + cool_white
+            # temperature: ratio of cool to total, scaled to 0-100
+            white_temp = round((cool_white / float(total)) * 100)
+            # brightness: clamp sum at 255, then scale to 0-100
+            clamped_sum = min(total, 255)
+            white_brightness = round((clamped_sum / 255.0) * 100)
 
         return [
             self.construct_wrapped_message(

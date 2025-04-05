@@ -4245,3 +4245,21 @@ async def test_extended_state_color_parsing(
     assert all(abs(a - b) <= 1 for a, b in zip(rgb, expected_rgb)), (
         f"{label} RGB mismatch: got {rgb}, expected {expected_rgb}"
     )
+
+
+@pytest.mark.asyncio
+async def test_setup_0x35_with_version_num_10(
+    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+):
+    """Test we use the right protocol for 0x35 with v10."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(bytes.fromhex("81352361306400ffff000a00f0c6"))
+    await task
+    assert light.model_num == 0x44
+    assert light.protocol == PROTOCOL_LEDENET_8BYTE_AUTO_ON
