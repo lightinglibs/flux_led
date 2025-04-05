@@ -1551,7 +1551,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         else:
             h = s = v = 0x00
 
-        if (cool_white is None or warm_white is None):
+        if cool_white is None or warm_white is None:
             white_temp = white_brightness = 0
         else:
             total = cool_white + warm_white
@@ -1560,12 +1560,12 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                 white_temp = white_brightness = 0
             
             else:
-                # temperature: ratio of cool to total, scaled to 0–100
-                white_temp = int(round((cool_white / float(total)) * 100))
+                # temperature: ratio of cool to total, scaled to 0-100
+                white_temp = round((cool_white / float(total)) * 100)
 
-                # brightness: clamp sum at 256, then scale to 0–100
+                # brightness: clamp sum at 256, then scale to 0-100
                 clamped_sum = min(total, 256)
-                white_brightness = int(round((clamped_sum / 256.0) * 100))
+                white_brightness = round((clamped_sum / 256.0) * 100)
 
         return [
             self.construct_wrapped_message(
