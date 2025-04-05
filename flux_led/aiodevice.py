@@ -729,6 +729,9 @@ class AIOWifiLedBulb(LEDENETDevice):
             self._last_message["state"] = msg
             self._async_process_state_response(msg)
             self._process_state_futures()
+        elif self._protocol.is_valid_extended_state_response(msg):
+            self._last_message["extended_state"] = msg
+            self.process_extended_state_response(msg)
         elif self._protocol.is_valid_power_state_response(msg):
             self._last_message["power_state"] = msg
             self.process_power_state_response(msg)

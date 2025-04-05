@@ -778,16 +778,19 @@ class LEDENETDevice:
         _LOGGER.debug("%s: device_config: %s", self.ipaddr, self._device_config)
 
     def process_state_response(self, rx: bytes) -> bool:
+        """Process a state change message."""
         assert self._protocol is not None
-
         if not self._protocol.is_valid_state_response(rx):
             _LOGGER.warning(
-                "%s: Recieved invalid response: %s",
+                "%s: Invalid response: %s",
                 self.ipaddr,
                 utils.raw_state_to_dec(rx),
             )
             return False
+        return self._process_valid_state_response(rx)
 
+    def _process_valid_state_response(self, rx: bytes) -> bool:
+        assert self._protocol is not None
         raw_state: LEDENETOriginalRawState | LEDENETRawState = (
             self._protocol.named_raw_state(rx)
         )
@@ -851,6 +854,19 @@ class LEDENETDevice:
             return False
         _LOGGER.debug("%s: Setting power state to: %s", self.ipaddr, f"0x{msg[2]:02X}")
         self._set_power_state(msg[2])
+        return True
+
+    def process_extended_state_response(self, msg: bytes) -> bool:
+        """Process and extended state response."""
+        assert self._protocol is not None
+        if not self._protocol.is_valid_extended_state_response(msg):
+            _LOGGER.warning(
+                "%s: Recieved invalid extended state response: %s",
+                self.ipaddr,
+                utils.raw_state_to_dec(msg),
+            )
+            return False
+        self._process_valid_state_response(self._protocol.extended_state_to_state(msg))
         return True
 
     def _set_raw_state(
