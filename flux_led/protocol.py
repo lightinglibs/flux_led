@@ -1520,11 +1520,11 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
     def construct_levels_change(
         self,
         persist: int,
-        red: int | None,
-        green: int | None,
-        blue: int | None,
-        warm_white: int | None,
-        cool_white: int | None,
+        red: int | None,  # 0-255
+        green: int | None,  # 0-255
+        blue: int | None,  # 0-255
+        warm_white: int | None,  # 0-255
+        cool_white: int | None,  # 0-255
         write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
@@ -1551,21 +1551,21 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         else:
             h = s = v = 0x00
 
-        if cool_white is None or warm_white is None:
+        if (
+            cool_white is None
+            or warm_white is None
+            or (cool_white == 0 and warm_white == 0)
+        ):
             white_temp = white_brightness = 0
         else:
-            total = cool_white + warm_white
-
-            if total == 0:
-                white_temp = white_brightness = 0
-
-            else:
-                # temperature: ratio of cool to total, scaled to 0-100
-                white_temp = round((cool_white / float(total)) * 100)
-
-                # brightness: clamp sum at 256, then scale to 0-100
-                clamped_sum = min(total, 256)
-                white_brightness = round((clamped_sum / 256.0) * 100)
+            # warm_white, cool_white is scaled 0-255
+            white_temp, white_brightness = white_levels_to_scaled_color_temp(
+                warm_white, cool_white
+            )
+            # white_temp, white_brightness is scaled 0-255
+            # Convert to 0-100 since the protocol uses 0-100
+            white_temp = round(white_temp * 100 / 255)
+            white_brightness = round(white_brightness * 100 / 255)
 
         return [
             self.construct_wrapped_message(
