@@ -859,13 +859,6 @@ class LEDENETDevice:
     def process_extended_state_response(self, msg: bytes) -> bool:
         """Process and extended state response."""
         assert self._protocol is not None
-        if not self._protocol.is_valid_extended_state_response(msg):
-            _LOGGER.warning(
-                "%s: Recieved invalid extended state response: %s",
-                self.ipaddr,
-                utils.raw_state_to_dec(msg),
-            )
-            return False
         self._process_valid_state_response(self._protocol.extended_state_to_state(msg))
         return True
 
