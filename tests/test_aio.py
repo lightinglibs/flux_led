@@ -36,6 +36,7 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
+    PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_ORIGINAL,
     LEDENETRawState,
@@ -4261,5 +4262,44 @@ async def test_setup_0x35_with_version_num_10(
     transport, protocol = await mock_aio_protocol()
     light._aio_protocol.data_received(bytes.fromhex("81352361306400ffff000a00f0c6"))
     await task
-    assert light.model_num == 0x44
-    assert light.protocol == PROTOCOL_LEDENET_8BYTE_AUTO_ON
+    assert light.model_num == 0x35
+    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert light.white_active is False
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xB0,
+                0xB1,
+                0xB2,
+                0xB3,
+                0x00,
+                0x02,
+                0x02,
+                0x17,
+                0x00,
+                0x14,
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0x35,
+                0x0A,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    assert light.white_active is True
