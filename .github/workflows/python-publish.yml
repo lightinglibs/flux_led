@@ -41,7 +41,7 @@ jobs:
       Publish Python 🐍 distribution 📦 to PyPI
     environment:
       name: pypi
-      url: https://pypi.org/p/pySwitchbot
+      url: https://pypi.org/p/flux_led
 
     steps:
       - name: Download all the dists
