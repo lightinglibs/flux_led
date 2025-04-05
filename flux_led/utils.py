@@ -20,18 +20,12 @@ class WhiteLevels(NamedTuple):
     warm_white: int
     cool_white: int
 
-    def __str__(self) -> str:
-        return f"Warm White: {self.warm_white}, Cool White: {self.cool_white}"
-
 
 class TemperatureBrightness(NamedTuple):
     """Temperature and brightness for a color."""
 
     temperature: int
     brightness: int
-
-    def __str__(self) -> str:
-        return f"Temperature: {self.temperature}, Brightness: {self.brightness}"
 
 
 class utils:
