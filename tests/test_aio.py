@@ -3297,7 +3297,7 @@ async def test_async_config_remotes_no_response(
     mock_aio_protocol, caplog: pytest.LogCaptureFixture
 ):
     """Test device supports remote config but does not respond."""
-    light = AIOWifiLedBulb("192.168.1.166", timeout=0.0001)
+    light = AIOWifiLedBulb("192.168.1.166", timeout=0.001)
     light.discovery = FLUX_DISCOVERY_24G_REMOTE
 
     def _updated_callback(*args, **kwargs):
