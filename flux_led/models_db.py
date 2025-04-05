@@ -1026,6 +1026,7 @@ MODELS = [
         # 'AK001-ZJ2147' is v9.7 (with RF remote control support)
         # 'AK001-ZJ21410' is v9.91 seen on the Bunpeon smart floor light ASIN:B09MN65324
         # 'AK001-ZJ21411' is v11.78 with Remote and 2.4G remote settings
+        # 'AK001-ZJ21412' is v12.14 with Remote and 2.4G remote settings
         models=[
             "AK001-ZJ200",
             "AK001-ZJ2101",
@@ -1035,6 +1036,7 @@ MODELS = [
             "AK001-ZJ2147",
             "AK001-ZJ21410",
             "AK001-ZJ21411",
+            "AK001-ZJ21412",
         ],
         description="Bulb RGBCW",
         always_writes_white_and_colors=False,  # Formerly rgbwprotocol
