@@ -4,9 +4,8 @@ import ast
 import colorsys
 import contextlib
 import datetime
-from collections import namedtuple
 from collections.abc import Iterable
-from typing import cast
+from typing import NamedTuple, cast
 
 import webcolors  # type: ignore[import-untyped]
 
@@ -15,22 +14,18 @@ from .const import MAX_TEMP, MIN_TEMP
 MAX_MIN_TEMP_DIFF = MAX_TEMP - MIN_TEMP
 
 
-WhiteLevels = namedtuple(
-    "WhiteLevels",
-    [
-        "warm_white",
-        "cool_white",
-    ],
-)
+class WhiteLevels(NamedTuple):
+    """White level for a color."""
+
+    warm_white: int
+    cool_white: int
 
 
-TemperatureBrightness = namedtuple(
-    "TemperatureBrightness",
-    [
-        "temperature",
-        "brightness",
-    ],
-)
+class TemperatureBrightness(NamedTuple):
+    """Temperature and brightness for a color."""
+
+    temperature: int
+    brightness: int
 
 
 class utils:

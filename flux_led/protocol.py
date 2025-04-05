@@ -28,7 +28,11 @@ from .const import (
     MultiColorEffects,
 )
 from .timer import LedTimer
-from .utils import utils, white_levels_to_scaled_color_temp
+from .utils import (
+    scaled_color_temp_to_white_levels,
+    utils,
+    white_levels_to_scaled_color_temp,
+)
 
 
 class RemoteConfig(Enum):
@@ -501,6 +505,13 @@ class ProtocolBase:
     @abstractmethod
     def is_valid_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
+
+    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+        return False
+
+    @abstractmethod
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert an extended state response to a state response."""
 
     def is_checksum_correct(self, msg: bytes) -> bool:
         """Check a checksum of a message."""
@@ -1423,14 +1434,97 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
 
+    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+        """Check if a state response is valid."""
+        return raw_state[0] == 0xEA and raw_state[1] == 0x81 and len(raw_state) >= 20
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert an extended state response to a state response."""
+        # pos  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19
+        #     EA  81  01  10  35  0A  23  61  01  50  0F  3C  64  64  00  64  00  00  00  00
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   |   White brightness
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   |   White temperature
+        #      |   |   |   |   |   |   |   |   |   |   |   |   |   Value
+        #      |   |   |   |   |   |   |   |   |   |   |   |   Saturation
+        #      |   |   |   |   |   |   |   |   |   |   |   Hue / 2 (0-180)
+        #      |   |   |   |   |   |   |   |   |   |   0f white / f0 rgb
+        #      |   |   |   |   |   |   |   |   |   Speed?
+        #      |   |   |   |   |   |   |   |   w 01 / rgb 00
+        #      |   |   |   |   |   |   |   ??
+        #      |   |   |   |   |   |   Power state (0x23 = ON, 0x24 = OFF)
+        #      |   |   |   |   |   ??
+        #      |   |   |   |   Version number
+        #      |   |   |   Model number
+        #      |   |   Unknown / reserved
+        #      |   Unknown / reserved
+        #   Extended message header (ea 81)
+
+        if len(raw_state) < 20:
+            return b""
+
+        model_num = raw_state[4]
+        version_number = raw_state[5]
+        power_state = raw_state[6]
+        preset_pattern = raw_state[7]
+        speed = raw_state[9]
+
+        hue = raw_state[11]
+        saturation = raw_state[12]
+        value = raw_state[13]
+
+        white_temp = raw_state[14]
+        white_brightness = raw_state[15]
+        levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
+
+        cool_white = levels.cool_white
+        warm_white = levels.warm_white
+
+        # Convert HSV to RGB
+        h = (hue * 2) / 360
+        s = saturation / 100
+        v = value / 100
+        r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
+        red = min(int(max(0, r_f) * 255), 255)
+        green = min(int(max(0, g_f) * 255), 255)
+        blue = min(int(max(0, b_f) * 255), 255)
+
+        # Fill standard state structure
+        mode = 0
+        color_mode = 0
+        check_sum = 0  # Set to 0; not critical
+
+        return bytes(
+            (
+                raw_state[1],  # Head (second byte of EA 81)
+                model_num,
+                power_state,
+                preset_pattern,
+                mode,
+                speed,
+                red,
+                green,
+                blue,
+                warm_white,
+                version_number,
+                cool_white,
+                color_mode,
+                check_sum,
+            )
+        )
+
     def construct_levels_change(
         self,
         persist: int,
-        red: int | None,
-        green: int | None,
-        blue: int | None,
-        warm_white: int | None,
-        cool_white: int | None,
+        red: int | None,  # 0-255
+        green: int | None,  # 0-255
+        blue: int | None,  # 0-255
+        warm_white: int | None,  # 0-255
+        cool_white: int | None,  # 0-255
         write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
         """The bytes to send for a level change request."""
@@ -1457,16 +1551,19 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         else:
             h = s = v = 0x00
 
-        if warm_white is not None and cool_white is not None:
-            # warm white comes through as 0, even when temp is set to 6500
-            white_brightness = round(((warm_white + cool_white) / (2 * 255)) * 64)
-            white_temp = round((cool_white / (warm_white + cool_white)) * 64)
-        elif cool_white is not None and warm_white is None:
-            white_temp = 0x64
-            white_brightness = int((cool_white / 255) * 100)
+        if (
+            cool_white is None
+            or warm_white is None
+            or (cool_white == 0 and warm_white == 0)
+        ):
+            white_temp = white_brightness = 0
         else:
-            white_temp = 0x00
-            white_brightness = 0x00
+            total = warm_white + cool_white
+            # temperature: ratio of cool to total, scaled to 0-100
+            white_temp = round((cool_white / float(total)) * 100)
+            # brightness: clamp sum at 255, then scale to 0-100
+            clamped_sum = min(total, 255)
+            white_brightness = round((clamped_sum / 255.0) * 100)
 
         return [
             self.construct_wrapped_message(
