@@ -1558,7 +1558,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
             if total == 0:
                 white_temp = white_brightness = 0
-            
+
             else:
                 # temperature: ratio of cool to total, scaled to 0-100
                 white_temp = round((cool_white / float(total)) * 100)
