@@ -6,7 +6,7 @@ setup_requirements = [
 
 test_requirements = [
     "pytest-asyncio",
-    "ruff==0.12.9",
+    "ruff==0.12.12",
     "codecov>=2.1.4",
     "pytest>=5.4.3",
     "pytest-cov>=2.9.0",

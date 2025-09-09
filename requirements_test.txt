@@ -5,4 +5,4 @@ pytest==8.4.2
 pytest-asyncio==1.1.0
 pytest-cov==6.3.0
 mypy==1.17.1
-ruff==0.12.9
+ruff==0.12.12
