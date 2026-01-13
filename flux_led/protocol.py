@@ -119,6 +119,15 @@ LEDENET_TIMERS_8BYTE_RESPONSE_LEN = 88
 LEDENET_TIMERS_9BYTE_RESPONSE_LEN = 94
 LEDENET_TIMERS_SOCKET_RESPONSE_LEN = 100
 
+# Byte positions for parsing state messages
+# Standard state format (0x81): model at position 1, version at position 10
+LEDENET_STATE_MODEL_POS = 1
+LEDENET_STATE_VERSION_POS = 10
+# Extended state format (0xEA 0x81): model at position 4, version at position 5
+# Extended state format was introduced in PR #428 for devices like 0x35 v10 and 0xB6
+LEDENET_EXTENDED_STATE_MODEL_POS = 4
+LEDENET_EXTENDED_STATE_VERSION_POS = 5
+
 MSG_ORIGINAL_POWER_STATE = "original_power_state"
 MSG_ORIGINAL_STATE = "original_state"
 MSG_POWER_RESTORE_STATE = "power_restore_state"
@@ -1021,13 +1030,29 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a message is the start of a state response."""
         return _message_type_from_start_of_msg(data) == MSG_POWER_STATE
 
+    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+        """Check if this is an extended state response (0xEA 0x81 format)."""
+        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
+
     def is_valid_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
+        # Check for extended state format (0xEA 0x81) used by 25BYTE protocol
+        if self.is_valid_extended_state_response(raw_state):
+            return True
+        # Check for standard state format (0x81)
         if len(raw_state) != self.state_response_length:
             return False
         if raw_state[0] != 129:
             return False
         return self.is_checksum_correct(raw_state)
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert an extended state response to a standard state response.
+
+        This is overridden by ProtocolLEDENET25Byte with the actual conversion logic.
+        """
+        # Default implementation for protocols that don't use extended state
+        return raw_state
 
     def construct_state_change(self, turn_on: int) -> bytearray:
         """
@@ -1433,6 +1458,14 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
     def name(self) -> str:
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
+
+    def is_valid_state_response(self, raw_state: bytes) -> bool:
+        """Check if a state response is valid."""
+        # This protocol can respond with either standard 0x81 format or extended 0xEA 0x81 format
+        if self.is_valid_extended_state_response(raw_state):
+            return True
+        # Fall back to parent class check for standard 0x81 responses
+        return super().is_valid_state_response(raw_state)
 
     def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""

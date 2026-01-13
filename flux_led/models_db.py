@@ -83,6 +83,7 @@ MODEL_INFO_NAMES = {
     "ZG-LX": "",  # Seen on floor lamp, v2 addressable, and Single channel controller
     "ZG-LX-UART": "",  # Seen on UK xmas lights 0x33, fairy controller, and lytworx
     "ZG-BL-PWM": "",  # Seen on 40w Flood Light
+    "ZG-BL-UFO": "",  # Seen on Surplife outdoor permanent lighting 0xB6
     "ZG-ZW2": "",  # seen on 0x97 socket
     "ZGIR44": "44 Key IR",
     "IR_ZG": "IR",
@@ -637,6 +638,15 @@ HARDWARE = [
         remote_24g_controls=False,
         auto_on=False,
         dimmable_effects=False,
+    ),
+    LEDENETHardware(
+        model="AK001-ZJ21413",  # Surplife outdoor permanent LED lighting
+        chip=LEDENETChip.BL602,
+        remote_rf=False,
+        remote_24g=True,  # has remote access enabled
+        remote_24g_controls=False,
+        auto_on=True,
+        dimmable_effects=True,
     ),
 ]
 
@@ -1295,6 +1305,21 @@ MODELS = [
         channel_map={},
         microphone=True,  # confirmed with mocks to be true
         device_config=NEW_ADDRESABLE_DEVICE_CONFIG,
+    ),
+    LEDENETModel(
+        model_num=0xB6,
+        models=["AK001-ZJ21413"],
+        description="Surplife Outdoor Permanent Lighting",
+        # NOTE: This device ONLY responds with extended state format (0xEA 0x81)
+        # introduced in PR #428, unlike 0x35 which can respond with both
+        # standard (0x81) and extended (0xEA 0x81) formats
+        always_writes_white_and_colors=False,
+        protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_25BYTE)],
+        mode_to_color_mode={0x01: COLOR_MODES_RGB_CCT, 0x17: COLOR_MODES_RGB_CCT},
+        color_modes=COLOR_MODES_RGB_CCT,
+        channel_map={},
+        microphone=False,
+        device_config=IMMUTABLE_DEVICE_CONFIG,
     ),
     LEDENETModel(
         model_num=0xD1,

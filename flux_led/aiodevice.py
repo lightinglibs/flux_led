@@ -725,13 +725,28 @@ class AIOWifiLedBulb(LEDENETDevice):
         if self._protocol.is_valid_outer_message(msg):
             msg = self._protocol.extract_inner_message(msg)
 
-        if self._protocol.is_valid_state_response(msg):
+        # Check for extended state BEFORE regular state to properly handle 0xEA responses
+        # Extended state format (0xEA 0x81) was introduced in PR #428 for 0x35 v10 devices
+        # Some devices (like 0xB6) ONLY respond with extended state format, so we check it first
+        if self._protocol.is_valid_extended_state_response(msg):
+            self._last_message["extended_state"] = msg
+            # Handle protocol determination for extended state
+            if (
+                self._determine_protocol_future
+                and not self._determine_protocol_future.done()
+            ):
+                assert self._protocol is not None
+                self._set_protocol_from_msg(msg, self._protocol.name)
+                self._determine_protocol_future.set_result(True)
+            self.process_extended_state_response(msg)
+            # Extended state includes both state and power state information
+            # so we need to resolve both types of futures
+            self._process_state_futures()
+            self._process_power_futures()
+        elif self._protocol.is_valid_state_response(msg):
             self._last_message["state"] = msg
             self._async_process_state_response(msg)
             self._process_state_futures()
-        elif self._protocol.is_valid_extended_state_response(msg):
-            self._last_message["extended_state"] = msg
-            self.process_extended_state_response(msg)
         elif self._protocol.is_valid_power_state_response(msg):
             self._last_message["power_state"] = msg
             self.process_power_state_response(msg)

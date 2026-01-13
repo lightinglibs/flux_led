@@ -77,13 +77,17 @@ from .pattern import (
     PresetPattern,
 )
 from .protocol import (
+    LEDENET_EXTENDED_STATE_MODEL_POS,
+    LEDENET_EXTENDED_STATE_VERSION_POS,
+    LEDENET_STATE_MODEL_POS,
+    LEDENET_STATE_VERSION_POS,
+    PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_8BYTE,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_9BYTE_AUTO_ON,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS,
-    PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
     PROTOCOL_LEDENET_ADDRESSABLE_A2,
     PROTOCOL_LEDENET_ADDRESSABLE_A3,
@@ -97,13 +101,13 @@ from .protocol import (
     LEDENETAddressableDeviceConfiguration,
     LEDENETOriginalRawState,
     LEDENETRawState,
+    ProtocolLEDENET25Byte,
     ProtocolLEDENET8Byte,
     ProtocolLEDENET8ByteAutoOn,
     ProtocolLEDENET8ByteDimmableEffects,
     ProtocolLEDENET9Byte,
     ProtocolLEDENET9ByteAutoOn,
     ProtocolLEDENET9ByteDimmableEffects,
-    ProtocolLEDENET25Byte,
     ProtocolLEDENETAddressableA1,
     ProtocolLEDENETAddressableA2,
     ProtocolLEDENETAddressableA3,
@@ -1252,9 +1256,25 @@ class LEDENETDevice:
         full_msg: bytes,
         fallback_protocol: str,
     ) -> None:
-        self._model_num = full_msg[1]
-        self._model_data = get_model(self._model_num, fallback_protocol)
-        version_num = full_msg[10] if len(full_msg) > 10 else 1
+        # Check if this is an extended state format (0xEA 0x81)
+        if len(full_msg) >= 20 and full_msg[0] == 0xEA and full_msg[1] == 0x81:
+            # Extended state format - use extended state byte positions
+            self._model_num = full_msg[LEDENET_EXTENDED_STATE_MODEL_POS]
+            self._model_data = get_model(self._model_num, fallback_protocol)
+            version_num = (
+                full_msg[LEDENET_EXTENDED_STATE_VERSION_POS]
+                if len(full_msg) > LEDENET_EXTENDED_STATE_VERSION_POS
+                else 1
+            )
+        else:
+            # Standard state format - use standard state byte positions
+            self._model_num = full_msg[LEDENET_STATE_MODEL_POS]
+            self._model_data = get_model(self._model_num, fallback_protocol)
+            version_num = (
+                full_msg[LEDENET_STATE_VERSION_POS]
+                if len(full_msg) > LEDENET_STATE_VERSION_POS
+                else 1
+            )
         self.setProtocol(self._model_data.protocol_for_version_num(version_num))
 
     def _generate_preset_pattern(
