@@ -1425,6 +1425,34 @@ class TestLight(unittest.TestCase):
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
     @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_surplife_sync(self, mock_connect, mock_read, mock_send):
+        """Test 0xB6 Surplife device with sync API."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\x81\xB6")  # Model 0xB6
+            if calls == 2:
+                # Standard state response (sync mode expects this during setup)
+                # Real device uses extended state, but mocking standard for compatibility
+                self.assertEqual(expected, 12)
+                return bytearray(b"\x23\x61\x24\x64\x00\x00\x00\x00\x01\x00\xf0\x34")
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_25BYTE)
+        self.assertEqual(light.model_num, 0xB6)
+        self.assertEqual(light.version_num, 1)
+        assert "Surplife" in light.model
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
     def test_rgbcw_bulb_v9(self, mock_connect, mock_read, mock_send):
         calls = 0
 

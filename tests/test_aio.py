@@ -4303,3 +4303,77 @@ async def test_setup_0x35_with_version_num_10(
         )
     )
     assert light.white_active is True
+
+
+@pytest.mark.asyncio
+async def test_setup_0xB6_surplife(mock_aio_protocol):
+    """Test setup of 0xB6 Surplife device with extended state."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+
+    # 0xB6 ONLY responds with extended state format (0xEA 0x81) per models_db.py:1313
+    # This tests the extended state code paths in aiodevice.py and base_device.py
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA, 0x81,  # Extended state header
+                0x01, 0x00,  # Reserved
+                0xB6,        # Model at position 4 (LEDENET_EXTENDED_STATE_MODEL_POS)
+                0x01,        # Version at position 5 (LEDENET_EXTENDED_STATE_VERSION_POS)
+                0x23, 0x61,  # Power on, mode
+                0x24, 0x64, 0x0F,  # Settings
+                0x00, 0x00, 0x00,  # RGB off
+                0x64, 0x64,  # WW/CW values
+                0x00, 0x00, 0x00, 0x00,  # Padding
+                0x83,  # Checksum
+            )
+        )
+    )
+    await task
+
+    assert light.model_num == 0xB6
+    assert light.version_num == 1
+    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert "Surplife" in light.model
+    assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
+
+
+def test_protocol_extended_state_validation_0xB6():
+    """Test protocol methods correctly handle extended state for 0xB6 device."""
+    from flux_led.protocol import ProtocolLEDENET8Byte, ProtocolLEDENET25Byte
+
+    extended_state = bytes(
+        (
+            0xEA, 0x81,  # Extended state header
+            0x01, 0x00,  # Reserved
+            0xB6,        # Model
+            0x01,        # Version
+            0x23, 0x61,  # Power on, mode
+            0x24, 0x64, 0x0F,  # Settings
+            0x00, 0x00, 0x00,  # RGB off
+            0x64, 0x64,  # WW/CW values
+            0x00, 0x00, 0x00, 0x00,  # Padding
+            0x83,  # Checksum
+        )
+    )
+
+    # Test ProtocolLEDENET8Byte validates extended state correctly
+    protocol_8byte = ProtocolLEDENET8Byte()
+    assert protocol_8byte.is_valid_extended_state_response(extended_state)
+    # This covers line 1040-1041: is_valid_state_response should return True for extended state
+    assert protocol_8byte.is_valid_state_response(extended_state)
+
+    # Test ProtocolLEDENET25Byte validates extended state correctly
+    protocol_25byte = ProtocolLEDENET25Byte()
+    assert protocol_25byte.is_valid_extended_state_response(extended_state)
+    # This covers line 1465-1466: is_valid_state_response should return True for extended state
+    assert protocol_25byte.is_valid_state_response(extended_state)
+
+    # Test extended_state_to_state default implementation (line 1055)
+    # ProtocolLEDENET8Byte uses the default implementation which just returns raw_state
+    assert protocol_8byte.extended_state_to_state(extended_state) == extended_state
