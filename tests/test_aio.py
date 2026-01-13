@@ -4321,15 +4321,26 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     light._aio_protocol.data_received(
         bytes(
             (
-                0xEA, 0x81,  # Extended state header
-                0x01, 0x00,  # Reserved
-                0xB6,        # Model at position 4 (LEDENET_EXTENDED_STATE_MODEL_POS)
-                0x01,        # Version at position 5 (LEDENET_EXTENDED_STATE_VERSION_POS)
-                0x23, 0x61,  # Power on, mode
-                0x24, 0x64, 0x0F,  # Settings
-                0x00, 0x00, 0x00,  # RGB off
-                0x64, 0x64,  # WW/CW values
-                0x00, 0x00, 0x00, 0x00,  # Padding
+                0xEA,
+                0x81,  # Extended state header
+                0x01,
+                0x00,  # Reserved
+                0xB6,  # Model at position 4 (LEDENET_EXTENDED_STATE_MODEL_POS)
+                0x01,  # Version at position 5 (LEDENET_EXTENDED_STATE_VERSION_POS)
+                0x23,
+                0x61,  # Power on, mode
+                0x24,
+                0x64,
+                0x0F,  # Settings
+                0x00,
+                0x00,
+                0x00,  # RGB off
+                0x64,
+                0x64,  # WW/CW values
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Padding
                 0x83,  # Checksum
             )
         )
@@ -4349,15 +4360,26 @@ def test_protocol_extended_state_validation_0xB6():
 
     extended_state = bytes(
         (
-            0xEA, 0x81,  # Extended state header
-            0x01, 0x00,  # Reserved
-            0xB6,        # Model
-            0x01,        # Version
-            0x23, 0x61,  # Power on, mode
-            0x24, 0x64, 0x0F,  # Settings
-            0x00, 0x00, 0x00,  # RGB off
-            0x64, 0x64,  # WW/CW values
-            0x00, 0x00, 0x00, 0x00,  # Padding
+            0xEA,
+            0x81,  # Extended state header
+            0x01,
+            0x00,  # Reserved
+            0xB6,  # Model
+            0x01,  # Version
+            0x23,
+            0x61,  # Power on, mode
+            0x24,
+            0x64,
+            0x0F,  # Settings
+            0x00,
+            0x00,
+            0x00,  # RGB off
+            0x64,
+            0x64,  # WW/CW values
+            0x00,
+            0x00,
+            0x00,
+            0x00,  # Padding
             0x83,  # Checksum
         )
     )

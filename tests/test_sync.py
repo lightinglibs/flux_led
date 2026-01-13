@@ -1434,7 +1434,7 @@ class TestLight(unittest.TestCase):
             calls += 1
             if calls == 1:
                 self.assertEqual(expected, 2)
-                return bytearray(b"\x81\xB6")  # Model 0xB6
+                return bytearray(b"\x81\xb6")  # Model 0xB6
             if calls == 2:
                 # Standard state response (sync mode expects this during setup)
                 # Real device uses extended state, but mocking standard for compatibility
