@@ -267,7 +267,7 @@ class WifiLedBulb(LEDENETDevice):
         read_bytes = 2
         for protocol_cls in self._protocol_probes():
             protocol = protocol_cls()
-            rx = self._send_and_read_with_retry(
+            rx: bytearray | None = self._send_and_read_with_retry(
                 protocol.construct_state_query(), read_bytes
             )
             # if any response is recieved, use the protocol
@@ -358,7 +358,7 @@ class WifiLedBulb(LEDENETDevice):
             return self._read_msg(self._protocol.state_response_length)
 
     def update_state(self, retry: int = 2) -> None:
-        rx = self.query_state(retry=retry)
+        rx: bytearray = self.query_state(retry=retry)
         if rx and self.process_state_response(rx):
             self.set_available("successfully processed state response")
             return
