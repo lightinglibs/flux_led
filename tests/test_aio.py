@@ -42,6 +42,7 @@ from flux_led.protocol import (
     LEDENETRawState,
     PowerRestoreState,
     PowerRestoreStates,
+    ProtocolLEDENET8Byte,
     ProtocolLEDENET25Byte,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
@@ -4356,8 +4357,6 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
 
 def test_protocol_extended_state_validation_0xB6():
     """Test protocol methods correctly handle extended state for 0xB6 device."""
-    from flux_led.protocol import ProtocolLEDENET8Byte, ProtocolLEDENET25Byte
-
     extended_state = bytes(
         (
             0xEA,
