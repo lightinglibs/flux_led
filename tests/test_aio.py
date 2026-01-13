@@ -3663,7 +3663,7 @@ async def test_async_scanner_enable_remote_access(mock_discovery_aio_protocol):
             remote_access_port=8815,
         )
     )
-    _transport, protocol = await mock_discovery_aio_protocol()
+    transport, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         b"192.168.213.252,B4E842E10588,AK001-ZJ2145", ("192.168.213.252", 48899)
     )
@@ -3691,7 +3691,7 @@ async def test_async_scanner_disable_remote_access(mock_discovery_aio_protocol):
             address="192.168.213.252",
         )
     )
-    _transport, protocol = await mock_discovery_aio_protocol()
+    transport, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         b"192.168.213.252,B4E842E10588,AK001-ZJ2145", ("192.168.213.252", 48899)
     )
@@ -3717,7 +3717,7 @@ async def test_async_scanner_reboot(mock_discovery_aio_protocol):
             address="192.168.213.252",
         )
     )
-    _transport, protocol = await mock_discovery_aio_protocol()
+    transport, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         b"192.168.213.252,B4E842E10588,AK001-ZJ2145", ("192.168.213.252", 48899)
     )
@@ -3740,7 +3740,7 @@ async def test_async_scanner_disable_remote_access_timeout(mock_discovery_aio_pr
             address="192.168.213.252",
         )
     )
-    _transport, protocol = await mock_discovery_aio_protocol()
+    transport, protocol = await mock_discovery_aio_protocol()
     protocol.datagram_received(
         b"192.168.213.252,B4E842E10588,AK001-ZJ2145", ("192.168.213.252", 48899)
     )
