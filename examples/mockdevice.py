@@ -62,8 +62,8 @@ class MagicHomeDiscoveryProtocol(asyncio.Protocol):
             len(data),
         )
         assert self.transport is not None
-        model_str = hex(DEVICE_ID)[2:].zfill(2).upper()
-        version_str = hex(VERSION)[2:].zfill(2).upper()
+        model_str = f"{DEVICE_ID:02X}"
+        version_str = f"{VERSION:02X}"
         minor_version_str = str(MINOR_VERSION).zfill(2).upper()
         if data.startswith(AIOBulbScanner.DISCOVER_MESSAGE):
             self.send(
@@ -71,7 +71,7 @@ class MagicHomeDiscoveryProtocol(asyncio.Protocol):
                 addr,
             )
         if data.startswith(AIOBulbScanner.VERSION_MESSAGE):
-            model_str = hex(DEVICE_ID)[2:].zfill(2).upper()
+            model_str = f"{DEVICE_ID:02X}"
             self.send(
                 f"+ok={model_str}_{minor_version_str}_20210428_ZG-BL\r".encode(), addr
             )

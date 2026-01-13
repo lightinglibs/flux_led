@@ -44,7 +44,7 @@ def _socket_retry(attempts: int = DEFAULT_RETRIES) -> WrapFuncType:  # type: ign
                     # always be seen as available in Home Assistant
                     # when it goes offline
                     raise
-            # unreachable
+            return None  # unreachable
 
         return cast("WrapFuncType", _retry_wrap)
 
