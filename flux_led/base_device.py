@@ -640,6 +640,20 @@ class LEDENETDevice:
         return [*effects, EFFECT_RANDOM]
 
     @property
+    def supports_extended_custom_effects(self) -> bool:
+        """Return True if device supports extended custom effects."""
+        return self.model_data.supports_extended_custom_effects
+
+    @property
+    def extended_custom_effect_pattern_list(self) -> list[str] | None:
+        """Return available extended custom effect patterns, or None if not supported."""
+        if not self.supports_extended_custom_effects:
+            return None
+        from .const import ExtendedCustomEffectPattern
+
+        return [p.name.lower().replace("_", " ") for p in ExtendedCustomEffectPattern]
+
+    @property
     def effect(self) -> str | None:
         """Return the current effect."""
         if self.protocol in CHRISTMAS_EFFECTS_PROTOCOLS:
@@ -1296,6 +1310,48 @@ class LEDENETDevice:
 
         assert self._protocol is not None
         return self._protocol.construct_custom_effect(rgb_list, speed, transition_type)
+
+    def _generate_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Generate the extended custom effect protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        # Validate pattern_id
+        valid_ids = set(range(1, 25)) | {101, 102}
+        if pattern_id not in valid_ids:
+            raise ValueError(f"Pattern ID must be 1-24 or 101-102, got {pattern_id}")
+
+        # Truncate if more than 8 colors
+        if len(colors) > 8:
+            _LOGGER.warning(
+                "Too many colors in %s, truncating list to %s", len(colors), 8
+            )
+            colors = colors[:8]
+
+        # Require at least one color
+        if len(colors) == 0:
+            raise ValueError("Surplife pattern requires at least one color")
+
+        # Validate color tuples
+        for idx, color in enumerate(colors):
+            if len(color) != 3:
+                raise ValueError(f"Color {idx} must be (R, G, B) tuple")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        return self._protocol.construct_extended_custom_effect(
+            pattern_id, colors, speed, density, direction, option
+        )
 
     def _effect_to_pattern(self, effect: str) -> int:
         """Convert an effect to a pattern code."""

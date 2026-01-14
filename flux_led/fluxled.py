@@ -49,7 +49,12 @@ from typing import Any
 
 from .aio import AIOWifiLedBulb
 from .aioscanner import AIOBulbScanner
-from .const import ATTR_ID, ATTR_IPADDR
+from .const import (
+    ATTR_ID,
+    ATTR_IPADDR,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectPattern,
+)
 from .pattern import PresetPattern
 from .scanner import FluxLEDDiscovery
 from .timer import LedTimer
@@ -106,6 +111,15 @@ Set preset pattern #35 with 40% speed:
 
 Set custom pattern 25% speed, red/green/blue, gradual change:
     %prog% 192.168.1.100 -C gradual 25 "red green (0,0,255)"
+
+Set extended custom effect (0xB6 devices) - wave pattern, 80% speed, 50% density:
+    %prog% 192.168.1.100 -E 1 80 50 "red green blue"
+
+Set extended effect with right-to-left direction and color change option:
+    %prog% 192.168.1.100 -E 2 50 75 "purple orange" --direction r2l --colorchange
+
+List available extended effect patterns:
+    %prog% --listextended
 
 Sync all bulb's clocks with this computer's:
     %prog% -sS --setclock
@@ -386,6 +400,84 @@ def processCustomArgs(
     return args[0], speed, color_list
 
 
+def processExtendedArgs(
+    parser: OptionParser, args: Any, direction: str, colorchange: bool
+) -> tuple[int, int, int, list[tuple[int, int, int]], int, int] | None:
+    """Process extended custom effect arguments.
+
+    Returns: (pattern_id, speed, density, color_list, direction, option)
+    """
+    # Validate pattern ID
+    try:
+        pattern_id = int(args[0])
+    except ValueError:
+        parser.error(f"PATTERN must be a number, got: {args[0]}")
+        return None
+
+    valid_pattern_ids = set(range(1, 23)) | {101, 102}
+    if pattern_id not in valid_pattern_ids:
+        parser.error(f"PATTERN must be 1-22 or 101-102, got: {pattern_id}")
+        return None
+
+    # Validate speed
+    try:
+        speed = int(args[1])
+        if speed < 0 or speed > 100:
+            parser.error("SPEED must be 0-100")
+            return None
+    except ValueError:
+        parser.error(f"SPEED must be a number, got: {args[1]}")
+        return None
+
+    # Validate density
+    try:
+        density = int(args[2])
+        if density < 0 or density > 100:
+            parser.error("DENSITY must be 0-100")
+            return None
+    except ValueError:
+        parser.error(f"DENSITY must be a number, got: {args[2]}")
+        return None
+
+    # Parse color list
+    try:
+        color_list_str = args[3].strip()
+        str_list = color_list_str.split(" ")
+        color_list: list[tuple[int, int, int]] = []
+        for s in str_list:
+            c = utils.color_object_to_tuple(s)
+            if c is not None and len(c) >= 3:
+                color_list.append((c[0], c[1], c[2]))
+            else:
+                raise ValueError(f"Invalid color: {s}")
+        if len(color_list) == 0:
+            parser.error("At least one color is required")
+            return None
+        if len(color_list) > 8:
+            print("Warning: More than 8 colors provided, truncating to 8")
+            color_list = color_list[:8]
+    except Exception as e:
+        parser.error(
+            f"COLORLIST isn't formatted right: {e}. "
+            "It should be a space-separated list of color names, hex values, or RGB triples"
+        )
+        return None
+
+    # Parse direction
+    if direction.lower() in ("l2r", "left", "ltr"):
+        dir_value = ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+    elif direction.lower() in ("r2l", "right", "rtl"):
+        dir_value = ExtendedCustomEffectDirection.RIGHT_TO_LEFT
+    else:
+        parser.error(f"Invalid direction: {direction}. Use l2r or r2l")
+        return None
+
+    # Option value
+    option_value = 0x01 if colorchange else 0x00
+
+    return pattern_id, speed, density, color_list, dir_value, option_value
+
+
 def parseArgs() -> tuple[Values, Any]:
     parser = OptionParser()
 
@@ -428,6 +520,13 @@ def parseArgs() -> tuple[Values, Any]:
         dest="listpresets",
         default=False,
         help="List preset codes",
+    )
+    info_group.add_option(
+        "--listextended",
+        action="store_true",
+        dest="listextended",
+        default=False,
+        help="List extended custom effect pattern codes (for 0xB6 devices)",
     )
     info_group.add_option(
         "--listcolors",
@@ -530,7 +629,35 @@ def parseArgs() -> tuple[Values, Any]:
         + "TYPE should be jump, gradual, or strobe. SPEED is percent. "
         + "COLORLIST is a space-separated list of color names, web hex values, or comma-separated RGB triples",
     )
+    mode_group.add_option(
+        "-E",
+        "--extended",
+        dest="extended",
+        metavar="PATTERN SPEED DENSITY COLORLIST",
+        default=None,
+        nargs=4,
+        help="Set extended custom effect (0xB6 devices). "
+        + "PATTERN is code 1-22 or 101-102 (use --listextended). "
+        + "SPEED and DENSITY are 0-100. "
+        + "COLORLIST is space-separated colors (1-8 colors). "
+        + "Use --direction and --colorchange for additional options.",
+    )
     parser.add_option_group(mode_group)
+
+    other_group.add_option(
+        "--direction",
+        dest="direction",
+        default="l2r",
+        metavar="DIR",
+        help="Direction for extended effect: l2r (left to right) or r2l (right to left). Default: l2r",
+    )
+    other_group.add_option(
+        "--colorchange",
+        action="store_true",
+        dest="colorchange",
+        default=False,
+        help="Enable color change option for extended effect",
+    )
 
     parser.add_option(
         "-i",
@@ -617,6 +744,12 @@ def parseArgs() -> tuple[Values, Any]:
             print(f"{c:2} {PresetPattern.valtostr(c)}")
         sys.exit(0)
 
+    if options.listextended:
+        print("Extended custom effect patterns (for 0xB6 devices):")
+        for p in ExtendedCustomEffectPattern:
+            print(f"{p.value:3} (0x{p.value:02X}) {p.name.lower().replace('_', ' ')}")
+        sys.exit(0)
+
     if options.listcolors:
         for c in utils.get_color_names_list():  # type: ignore
             print(f"{c}, ")
@@ -642,9 +775,11 @@ def parseArgs() -> tuple[Values, Any]:
         mode_count += 1
     if options.custom:
         mode_count += 1
+    if options.extended:
+        mode_count += 1
     if mode_count > 1:
         parser.error(
-            "options --color, --*white, --preset, --CCT, and --custom are mutually exclusive"
+            "options --color, --*white, --preset, --CCT, --custom, and --extended are mutually exclusive"
         )
 
     if options.on and options.off:
@@ -652,6 +787,11 @@ def parseArgs() -> tuple[Values, Any]:
 
     if options.custom:
         options.custom = processCustomArgs(parser, options.custom)
+
+    if options.extended:
+        options.extended = processExtendedArgs(
+            parser, options.extended, options.direction, options.colorchange
+        )
 
     if options.color:
         options.color = utils.color_object_to_tuple(options.color)
@@ -794,6 +934,29 @@ async def _async_run_commands(
             f"Setting preset pattern: {PresetPattern.valtostr(options.preset[0])}, Speed={options.preset[1]}%"
         )
         await bulb.async_set_preset_pattern(options.preset[0], options.preset[1])
+
+    elif options.extended is not None:
+        if not bulb.supports_extended_custom_effects:
+            raise ValueError(
+                f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
+                "does not support extended custom effects. "
+                "This feature is only available on 0xB6 devices."
+            )
+        pattern_id, speed, density, colors, direction, option = options.extended
+        # Get pattern name for display
+        try:
+            pattern_name = ExtendedCustomEffectPattern(pattern_id).name.lower().replace("_", " ")
+        except ValueError:
+            pattern_name = f"pattern {pattern_id}"
+        dir_name = "L->R" if direction == ExtendedCustomEffectDirection.LEFT_TO_RIGHT else "R->L"
+        buf_in(
+            f"Setting extended effect: {pattern_name}, "
+            f"Speed={speed}%, Density={density}%, Direction={dir_name}, "
+            f"Colors={colors}"
+        )
+        await bulb.async_set_extended_custom_effect(
+            pattern_id, colors, speed, density, direction, option
+        )
 
     if options.on:
         buf_in(f"Turning on bulb at {bulb.ipaddr}")

@@ -1436,8 +1436,10 @@ class TestLight(unittest.TestCase):
                 self.assertEqual(expected, 2)
                 return bytearray(b"\x81\xb6")  # Model 0xB6
             if calls == 2:
-                # Standard state response (sync mode expects this during setup)
-                # Real device uses extended state, but mocking standard for compatibility
+                # Sync API reads fixed state_response_length bytes (12 for this protocol).
+                # Real 0xB6 device responds with extended state (0xEA 0x81, 21 bytes).
+                # Extended state handling is tested in test_aio.py:test_setup_0xB6_surplife.
+                # This test validates model detection and protocol assignment from models_db.
                 self.assertEqual(expected, 12)
                 return bytearray(b"\x23\x61\x24\x64\x00\x00\x00\x00\x01\x00\xf0\x34")
 

@@ -1469,7 +1469,7 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
     def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
-        return raw_state[0] == 0xEA and raw_state[1] == 0x81 and len(raw_state) >= 20
+        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
 
     def extended_state_to_state(self, raw_state: bytes) -> bytes:
         """Convert an extended state response to a state response."""
@@ -1512,10 +1512,16 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
         white_temp = raw_state[14]
         white_brightness = raw_state[15]
-        levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
 
-        cool_white = levels.cool_white
-        warm_white = levels.warm_white
+        # When in custom pattern mode or RGB mode, white_temp may be 0xFF (255)
+        # In this case, there are no white channels active
+        if white_temp > 100 or white_brightness == 0:
+            cool_white = 0
+            warm_white = 0
+        else:
+            levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
+            cool_white = levels.cool_white
+            warm_white = levels.warm_white
 
         # Convert HSV to RGB
         h = (hue * 2) / 360
@@ -1624,6 +1630,77 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                 version=0x02,
             )
         ]
+
+    def construct_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Construct an extended custom effect command.
+
+        Protocol format:
+          0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
+         e1 21 00 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
+                    |  |  |  |  |                    |  colors (5 bytes each)
+                    |  |  |  |  |                    color count
+                    |  |  |  |  speed (0-100)
+                    |  |  |  density (0-100)
+                    |  |  direction (01=L->R, 02=R->L)
+                    |  option (00=default, 01=color change)
+                    pattern_id (1-24 or 101-102)
+
+        Args:
+            pattern_id: Pattern ID 1-24 or 101-102
+            colors: List of 1-8 RGB color tuples (0-255 per channel)
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: 0x01=L->R, 0x02=R->L (default L->R)
+            option: Pattern-specific option (default 0)
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Clamp values to valid range
+        speed = max(0, min(100, speed))
+        density = max(0, min(100, density))
+
+        # Build inner message
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                pattern_id,
+                option,
+                direction,
+                density,
+                speed,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                len(colors),  # Color count
+            ]
+        )
+
+        # Add colors as HSV (5 bytes each: H/2, S, V, 0, 0)
+        for r, g, b in colors:
+            h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+            hsv_h = int(h * 180)  # 0-360 -> 0-180
+            hsv_s = int(s * 100)  # 0-1 -> 0-100
+            hsv_v = int(v * 100)  # 0-1 -> 0-100
+            msg.extend([hsv_h, hsv_s, hsv_v, 0x00, 0x00])
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

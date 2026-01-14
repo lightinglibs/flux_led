@@ -378,5 +378,38 @@ class WifiLedBulb(LEDENETDevice):
             retry=retry,
         )
 
+    def setExtendedCustomEffect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set an extended custom effect on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            pattern_id: Pattern ID (1-24 or 101-102). See ExtendedCustomEffectPattern.
+            colors: List of 1-8 RGB color tuples, e.g., [(255, 0, 0), (0, 255, 0)]
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: Animation direction. See ExtendedCustomEffectDirection.
+                0x01 = Left to Right (default)
+                0x02 = Right to Left
+            option: Pattern-specific option (default 0)
+            retry: Number of retries on failure
+        """
+        self._send_and_read_with_retry(
+            self._generate_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            ),
+            0,
+            retry=retry,
+        )
+
     def refreshState(self) -> None:
         return self.update_state()

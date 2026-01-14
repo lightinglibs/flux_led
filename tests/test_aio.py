@@ -4315,7 +4315,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
         pass
 
     task = asyncio.create_task(light.async_setup(_updated_callback))
-    _transport, _protocol = await mock_aio_protocol()
+    await mock_aio_protocol()
 
     # 0xB6 ONLY responds with extended state format (0xEA 0x81) per models_db.py:1313
     # This tests the extended state code paths in aiodevice.py and base_device.py

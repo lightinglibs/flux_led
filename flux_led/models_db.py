@@ -348,6 +348,7 @@ class LEDENETModel:
     channel_map: dict[str, str]  # Used to remap channels
     microphone: bool
     device_config: LEDENETDeviceConfigurationOptions
+    supports_extended_custom_effects: bool = False
 
     def protocol_for_version_num(self, version_num: int) -> str:
         protocol = self.protocols[-1].protocol
@@ -1317,12 +1318,26 @@ MODELS = [
         # NOTE: This device ONLY responds with extended state format (0xEA 0x81)
         # introduced in PR #428, unlike 0x35 which can respond with both
         # standard (0x81) and extended (0xEA 0x81) formats
+        #
+        # CUSTOM PATTERNS: This device supports 24 unique pattern types (wave,
+        # meteor, jump, strobe, comet, etc.) with customizable colors, speed, and
+        # density via ExtendedCustomEffectPattern and async_set_extended_custom_effect().
+        # The manufacturer's app shows 45 "scenes" (pre-configured colors) and 24
+        # "customizable patterns" (user-chosen colors), but they share the same
+        # pattern IDs - scenes are just preset color combinations of the patterns.
+        # Pattern IDs: 1-22 (animated), 101-102 (static). When active, preset_pattern
+        # byte = 0x25 (37) and byte 8 = actual pattern ID.
+        #
+        # STANDARD PRESET PATTERNS: NOT SUPPORTED by this device hardware. Standard
+        # preset pattern commands (0x61...) and custom effect commands (0x51...) do
+        # not work and will never work on this device.
         always_writes_white_and_colors=False,
         protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_25BYTE)],
         mode_to_color_mode={0x01: COLOR_MODES_RGB_CCT, 0x17: COLOR_MODES_RGB_CCT},
         color_modes=COLOR_MODES_RGB_CCT,
         channel_map={},
         microphone=False,
+        supports_extended_custom_effects=True,
         device_config=IMMUTABLE_DEVICE_CONFIG,
     ),
     LEDENETModel(
