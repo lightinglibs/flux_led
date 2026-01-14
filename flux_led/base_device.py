@@ -56,6 +56,7 @@ from .models_db import (
     HARDWARE_MAP,
     LEDENETHardware,
     LEDENETModel,
+    extract_model_version_from_state,
     get_model,
     is_known_model,
 )
@@ -77,10 +78,6 @@ from .pattern import (
     PresetPattern,
 )
 from .protocol import (
-    LEDENET_EXTENDED_STATE_MODEL_POS,
-    LEDENET_EXTENDED_STATE_VERSION_POS,
-    LEDENET_STATE_MODEL_POS,
-    LEDENET_STATE_VERSION_POS,
     PROTOCOL_LEDENET_8BYTE,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
@@ -1256,25 +1253,9 @@ class LEDENETDevice:
         full_msg: bytes,
         fallback_protocol: str,
     ) -> None:
-        # Check if this is an extended state format (0xEA 0x81)
-        if len(full_msg) >= 20 and full_msg[0] == 0xEA and full_msg[1] == 0x81:
-            # Extended state format - use extended state byte positions
-            self._model_num = full_msg[LEDENET_EXTENDED_STATE_MODEL_POS]
-            self._model_data = get_model(self._model_num, fallback_protocol)
-            version_num = (
-                full_msg[LEDENET_EXTENDED_STATE_VERSION_POS]
-                if len(full_msg) > LEDENET_EXTENDED_STATE_VERSION_POS
-                else 1
-            )
-        else:
-            # Standard state format - use standard state byte positions
-            self._model_num = full_msg[LEDENET_STATE_MODEL_POS]
-            self._model_data = get_model(self._model_num, fallback_protocol)
-            version_num = (
-                full_msg[LEDENET_STATE_VERSION_POS]
-                if len(full_msg) > LEDENET_STATE_VERSION_POS
-                else 1
-            )
+        model_num, version_num = extract_model_version_from_state(full_msg)
+        self._model_num = model_num
+        self._model_data = get_model(self._model_num, fallback_protocol)
         self.setProtocol(self._model_data.protocol_for_version_num(version_num))
 
     def _generate_preset_pattern(

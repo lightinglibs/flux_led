@@ -20,6 +20,10 @@ from .const import (
     STATE_WARM_WHITE,
 )
 from .protocol import (
+    LEDENET_EXTENDED_STATE_MODEL_POS,
+    LEDENET_EXTENDED_STATE_VERSION_POS,
+    LEDENET_STATE_MODEL_POS,
+    LEDENET_STATE_VERSION_POS,
     A1_NUM_TO_OPERATING_MODE,
     A1_NUM_TO_PROTOCOL,
     A1_OPERATING_MODE_TO_NUM,
@@ -1370,6 +1374,33 @@ MODELS = [
 ]
 
 MODEL_MAP: dict[int, LEDENETModel] = {model.model_num: model for model in MODELS}
+
+
+def extract_model_version_from_state(full_msg: bytes) -> tuple[int, int]:
+    """Extract model number and version number from a state message.
+
+    Handles both standard state format (0x81) and extended state format (0xEA 0x81).
+
+    Returns:
+        Tuple of (model_num, version_num), with version_num defaulting to 1 if not present.
+    """
+    if len(full_msg) >= 20 and full_msg[0] == 0xEA and full_msg[1] == 0x81:
+        # Extended state format
+        model_num = full_msg[LEDENET_EXTENDED_STATE_MODEL_POS]
+        version_num = (
+            full_msg[LEDENET_EXTENDED_STATE_VERSION_POS]
+            if len(full_msg) > LEDENET_EXTENDED_STATE_VERSION_POS
+            else 1
+        )
+    else:
+        # Standard state format
+        model_num = full_msg[LEDENET_STATE_MODEL_POS]
+        version_num = (
+            full_msg[LEDENET_STATE_VERSION_POS]
+            if len(full_msg) > LEDENET_STATE_VERSION_POS
+            else 1
+        )
+    return model_num, version_num
 
 
 def get_model(model_num: int, fallback_protocol: str | None = None) -> LEDENETModel:

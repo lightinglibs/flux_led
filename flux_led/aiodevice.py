@@ -706,7 +706,8 @@ class AIOWifiLedBulb(LEDENETDevice):
                 )
             self._async_process_message(msg)
 
-    def _async_process_state_response(self, msg: bytes) -> bool:
+    def _resolve_protocol_determination(self, msg: bytes) -> None:
+        """Resolve pending protocol determination if applicable."""
         if (
             self._determine_protocol_future
             and not self._determine_protocol_future.done()
@@ -714,7 +715,6 @@ class AIOWifiLedBulb(LEDENETDevice):
             assert self._protocol is not None
             self._set_protocol_from_msg(msg, self._protocol.name)
             self._determine_protocol_future.set_result(True)
-        return self.process_state_response(msg)
 
     def _async_process_message(self, msg: bytes) -> None:
         """Process a full message (maybe reassembled)."""
@@ -730,14 +730,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         # Some devices (like 0xB6) ONLY respond with extended state format, so we check it first
         if self._protocol.is_valid_extended_state_response(msg):
             self._last_message["extended_state"] = msg
-            # Handle protocol determination for extended state
-            if (
-                self._determine_protocol_future
-                and not self._determine_protocol_future.done()
-            ):
-                assert self._protocol is not None
-                self._set_protocol_from_msg(msg, self._protocol.name)
-                self._determine_protocol_future.set_result(True)
+            self._resolve_protocol_determination(msg)
             self.process_extended_state_response(msg)
             # Extended state includes both state and power state information
             # so we need to resolve both types of futures
@@ -745,7 +738,8 @@ class AIOWifiLedBulb(LEDENETDevice):
             self._process_power_futures()
         elif self._protocol.is_valid_state_response(msg):
             self._last_message["state"] = msg
-            self._async_process_state_response(msg)
+            self._resolve_protocol_determination(msg)
+            self.process_state_response(msg)
             self._process_state_futures()
         elif self._protocol.is_valid_power_state_response(msg):
             self._last_message["power_state"] = msg
