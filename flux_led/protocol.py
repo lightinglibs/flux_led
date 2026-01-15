@@ -1533,7 +1533,17 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         blue = min(int(max(0, b_f) * 255), 255)
 
         # Fill standard state structure
+        # For devices with extended custom effects, when preset_pattern is 0x25 (custom
+        # pattern mode), position 8 contains the actual pattern ID (1-22, 101-102)
+        # which should be stored in 'mode' for proper effect identification.
         mode = 0
+        if preset_pattern == 0x25:
+            # Lazy import to avoid circular dependency
+            from .models_db import get_model
+
+            model_data = get_model(model_num)
+            if model_data.supports_extended_custom_effects:
+                mode = raw_state[8]  # Extended custom effect pattern ID
         color_mode = 0
         check_sum = 0  # Set to 0; not critical
 
@@ -1631,6 +1641,14 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
             )
         ]
 
+    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
+        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
+
+        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, 0x00]
+
     def construct_extended_custom_effect(
         self,
         pattern_id: int,
@@ -1668,6 +1686,14 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         speed = max(0, min(100, speed))
         density = max(0, min(100, density))
 
+        # Convert Enum to value if needed
+        if hasattr(pattern_id, "value"):
+            pattern_id = pattern_id.value
+        if hasattr(option, "value"):
+            option = option.value
+        if hasattr(direction, "value"):
+            direction = direction.value
+
         # Build inner message
         msg = bytearray(
             [
@@ -1690,13 +1716,42 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
             ]
         )
 
-        # Add colors as HSV (5 bytes each: H/2, S, V, 0, 0)
+        # Add colors as HSV (5 bytes each)
         for r, g, b in colors:
-            h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-            hsv_h = int(h * 180)  # 0-360 -> 0-180
-            hsv_s = int(s * 100)  # 0-1 -> 0-100
-            hsv_v = int(v * 100)  # 0-1 -> 0-100
-            msg.extend([hsv_h, hsv_s, hsv_v, 0x00, 0x00])
+            msg.extend(self._rgb_to_hsv_bytes(r, g, b))
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Construct a custom segment colors command (0xE1 0x22).
+
+        Sets static HSV colors for each of 20 segments on the light strip.
+        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
+
+        Protocol format:
+          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
+
+        Args:
+            segments: List of up to 20 segment colors. Each segment is either:
+                - None or (0, 0, 0) for off
+                - (R, G, B) tuple with values 0-255
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Build inner message: header + 20 segments
+        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+
+        for i in range(20):
+            if i < len(segments) and segments[i] and segments[i] != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segments[i]))
+            else:
+                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
 
         return self.construct_wrapped_message(
             msg, inner_pre_constructed=True, version=0x02

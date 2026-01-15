@@ -201,6 +201,39 @@ ASSESSABLE_MULTI_COLOR_NAME_ID = {
     v: k for k, v in ASSESSABLE_MULTI_COLOR_ID_NAME.items()
 }
 
+# Extended custom effect pattern names for 0xB6 (Surplife) devices
+# These map to ExtendedCustomEffectPattern enum values
+EXTENDED_CUSTOM_EFFECT_ID_NAME = {
+    0x01: "Wave",
+    0x02: "Meteor",
+    0x03: "Streamer",
+    0x04: "Building Blocks",
+    0x05: "Flowing Water",
+    0x06: "Chase",
+    0x07: "Horse Racing",
+    0x08: "Cycle",
+    0x09: "Breathe",
+    0x0A: "Jump",
+    0x0B: "Strobe",
+    0x0C: "Twinkling Stars",
+    0x0D: "Stars Wink",
+    0x0E: "Warning",
+    0x0F: "Collision",
+    0x10: "Fireworks",
+    0x11: "Comet",
+    0x12: "Gradient Meteor",
+    0x13: "Volcano",
+    0x14: "Superluminal",
+    0x15: "Rainbow Bridge",
+    0x16: "Gradient Overlay",
+    0x65: "Static Gradient",
+    0x66: "Static Fill",
+    0x6E: "Solid Color",  # Mode when solid color is set
+}
+EXTENDED_CUSTOM_EFFECT_NAME_ID = {
+    v: k for k, v in EXTENDED_CUSTOM_EFFECT_ID_NAME.items()
+}
+
 ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME = {
     1: "Circulate all modes",
     2: "7 colors change gradually",

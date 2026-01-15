@@ -411,5 +411,25 @@ class WifiLedBulb(LEDENETDevice):
             retry=retry,
         )
 
+    def setCustomSegmentColors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set custom colors for each segment on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        Sets static HSV colors for each of 20 segments on the light strip.
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+            retry: Number of retries on failure
+        """
+        self._send_and_read_with_retry(
+            self._generate_custom_segment_colors(segments),
+            0,
+            retry=retry,
+        )
+
     def refreshState(self) -> None:
         return self.update_state()

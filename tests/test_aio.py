@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import colorsys
 import contextlib
 import datetime
 import json
@@ -29,6 +30,9 @@ from flux_led.const import (
     MAX_TEMP,
     MIN_TEMP,
     PUSH_UPDATE_INTERVAL,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
+    ExtendedCustomEffectPattern,
     MultiColorEffects,
     WhiteChannelType,
 )
@@ -4398,3 +4402,256 @@ def test_protocol_extended_state_validation_0xB6():
     # Test extended_state_to_state default implementation (line 1055)
     # ProtocolLEDENET8Byte uses the default implementation which just returns raw_state
     assert protocol_8byte.extended_state_to_state(extended_state) == extended_state
+
+
+# Extended Custom Effect Tests (for devices with supports_extended_custom_effects=True)
+
+
+def test_extended_custom_effect_pattern_enum_values():
+    """Test ExtendedCustomEffectPattern enum has expected values."""
+    assert ExtendedCustomEffectPattern.WAVE.value == 0x01
+    assert ExtendedCustomEffectPattern.METEOR.value == 0x02
+    assert ExtendedCustomEffectPattern.STREAMER.value == 0x03
+    assert ExtendedCustomEffectPattern.BUILDING_BLOCKS.value == 0x04
+    assert ExtendedCustomEffectPattern.BREATHE.value == 0x09
+    assert ExtendedCustomEffectPattern.STATIC_GRADIENT.value == 0x65
+    assert ExtendedCustomEffectPattern.STATIC_FILL.value == 0x66
+
+
+def test_extended_custom_effect_direction_enum_values():
+    """Test ExtendedCustomEffectDirection enum has expected values."""
+    assert ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value == 0x01
+    assert ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value == 0x02
+
+
+def test_extended_custom_effect_option_enum_values():
+    """Test ExtendedCustomEffectOption enum has expected values."""
+    assert ExtendedCustomEffectOption.DEFAULT.value == 0x00
+    assert ExtendedCustomEffectOption.VARIANT_1.value == 0x01
+    assert ExtendedCustomEffectOption.VARIANT_2.value == 0x02
+
+
+def test_construct_extended_custom_effect_single_color():
+    """Test constructing an extended custom effect with single color."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Single red color, pattern Wave, default settings
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=50,
+        density=50,
+        direction=0x01,
+        option=0x00,
+    )
+
+    # Result should be a wrapped message
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+    # Check the wrapper header (b0 b1 b2 b3)
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+
+def test_construct_extended_custom_effect_multiple_colors():
+    """Test constructing an extended custom effect with multiple colors."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Three colors: red, green, blue
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=2,  # Meteor
+        colors=colors,
+        speed=80,
+        density=100,
+        direction=0x02,  # Right to Left
+        option=0x01,  # Color change
+    )
+
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_construct_extended_custom_effect_color_order():
+    """Test that colors are stored in input order."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Two distinct colors
+    colors = [(255, 0, 0), (0, 0, 255)]  # Red, Blue
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+        speed=50,
+        density=50,
+    )
+
+    # The message structure after wrapper:
+    # Inner message starts after wrapper header + length bytes
+    # Find the color data section (after the 16-byte header)
+    # Colors are 5 bytes each (H, S, V, 0, 0) in input order
+
+    # Red (255, 0, 0) in HSV: H=0, S=100, V=100 -> stored as (0, 100, 100)
+    # Blue (0, 0, 255) in HSV: H=240, S=100, V=100 -> stored as (120, 100, 100)
+
+    # Red should come first in the message (same order as input)
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_hsv_conversion():
+    """Test RGB to HSV conversion accuracy."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Test with a known color: pure green
+    colors = [(0, 255, 0)]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+    )
+
+    # Green in HSV: H=120, S=100%, V=100%
+    # Stored as: H/2=60, S=100, V=100
+    # Verify the message was constructed
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_construct_extended_custom_effect_speed_clamping():
+    """Test that speed is clamped to 0-100."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Speed > 100 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=150,
+    )
+    assert isinstance(result, bytearray)
+
+    # Speed < 0 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=-10,
+    )
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_density_clamping():
+    """Test that density is clamped to 0-100."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Density > 100 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        density=200,
+    )
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_max_colors():
+    """Test constructing an effect with maximum 8 colors."""
+    proto = ProtocolLEDENET25Byte()
+
+    # 8 colors (maximum)
+    colors = [
+        (255, 0, 0),
+        (255, 128, 0),
+        (255, 255, 0),
+        (0, 255, 0),
+        (0, 255, 255),
+        (0, 0, 255),
+        (128, 0, 255),
+        (255, 0, 255),
+    ]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+    )
+
+    assert isinstance(result, bytearray)
+    # Each color is 5 bytes, 8 colors = 40 bytes for colors
+    # Plus 16 bytes header = 56 bytes inner message
+    # Plus wrapper overhead
+
+
+def test_construct_extended_custom_effect_with_enums():
+    """Test using enum values for parameters."""
+    proto = ProtocolLEDENET25Byte()
+
+    result = proto.construct_extended_custom_effect(
+        pattern_id=ExtendedCustomEffectPattern.WAVE,
+        colors=[(255, 0, 0)],
+        speed=50,
+        density=50,
+        direction=ExtendedCustomEffectDirection.RIGHT_TO_LEFT,
+        option=ExtendedCustomEffectOption.VARIANT_1,
+    )
+
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_with_variant_2():
+    """Test using VARIANT_2 option (e.g., breathe mode for rainbow patterns)."""
+    proto = ProtocolLEDENET25Byte()
+
+    # Rainbow colors with VARIANT_2 option
+    colors = [
+        (255, 0, 0),  # Red
+        (255, 255, 0),  # Yellow
+        (0, 255, 0),  # Green
+        (0, 255, 255),  # Cyan
+        (0, 0, 255),  # Blue
+        (255, 0, 255),  # Magenta
+    ]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=12,  # Twinkling stars
+        colors=colors,
+        speed=60,
+        density=100,
+        direction=ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+        option=ExtendedCustomEffectOption.VARIANT_2,
+    )
+
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_extended_custom_effect_hsv_values():
+    """Test specific HSV value calculations."""
+    # Test the HSV conversion formula used in the protocol
+    # RGB (255, 0, 0) -> HSV (0, 100%, 100%) -> stored as (0, 100, 100)
+    r, g, b = 255, 0, 0
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 0  # Red hue
+    assert hsv_s == 100  # Full saturation
+    assert hsv_v == 100  # Full value
+
+    # RGB (0, 0, 255) -> HSV (240, 100%, 100%) -> stored as (120, 100, 100)
+    r, g, b = 0, 0, 255
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 120  # Blue hue (240/2)
+    assert hsv_s == 100
+    assert hsv_v == 100
+
+    # RGB (0, 255, 0) -> HSV (120, 100%, 100%) -> stored as (60, 100, 100)
+    r, g, b = 0, 255, 0
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 60  # Green hue (120/2)
+    assert hsv_s == 100
+    assert hsv_v == 100

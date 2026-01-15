@@ -73,6 +73,7 @@ from .pattern import (
     EFFECT_LIST,
     EFFECT_LIST_DIMMABLE,
     EFFECT_LIST_LEGACY_CCT,
+    EXTENDED_CUSTOM_EFFECT_ID_NAME,
     ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME,
     ORIGINAL_ADDRESSABLE_EFFECT_NAME_ID,
     PresetPattern,
@@ -667,6 +668,9 @@ class LEDENETDevice:
         mode = self.raw_state.mode
         pattern_code = self.preset_pattern_num
         protocol = self.protocol
+        # Devices with extended custom effects use different pattern names
+        if self.supports_extended_custom_effects and pattern_code == 0x25:
+            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
         if protocol in OLD_EFFECTS_PROTOCOLS:
             effect_id = (pattern_code << 8) + mode - 99
             return ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.get(effect_id)
@@ -1352,6 +1356,37 @@ class LEDENETDevice:
         return self._protocol.construct_extended_custom_effect(
             pattern_id, colors, speed, density, direction, option
         )
+
+    def _generate_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Generate custom segment colors protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        # Truncate if more than 20 segments
+        if len(segments) > 20:
+            _LOGGER.warning(
+                "Too many segments (%s), truncating to 20", len(segments)
+            )
+            segments = segments[:20]
+
+        # Validate color tuples
+        for idx, color in enumerate(segments):
+            if color is None:
+                continue
+            if len(color) != 3:
+                raise ValueError(f"Segment {idx} must be (R, G, B) tuple or None")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        return self._protocol.construct_custom_segment_colors(segments)
 
     def _effect_to_pattern(self, effect: str) -> int:
         """Convert an effect to a pattern code."""

@@ -448,6 +448,22 @@ class AIOWifiLedBulb(LEDENETDevice):
             )
         )
 
+    async def async_set_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> None:
+        """Set custom colors for each segment on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        Sets static HSV colors for each of 20 segments on the light strip.
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        await self._async_send_msg(
+            self._generate_custom_segment_colors(segments)
+        )
+
     async def async_set_effect(
         self, effect: str, speed: int, brightness: int = 100
     ) -> None:

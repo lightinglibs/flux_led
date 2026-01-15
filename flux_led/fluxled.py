@@ -118,6 +118,9 @@ Set extended custom effect (0xB6 devices) - wave pattern, 80% speed, 50% density
 Set extended effect with right-to-left direction and color change option:
     %prog% 192.168.1.100 -E 2 50 75 "purple orange" --direction r2l --colorchange
 
+Set custom segment colors (0xB6 devices) - set each segment individually:
+    %prog% 192.168.1.100 -G "red green blue off off red green blue"
+
 List available extended effect patterns:
     %prog% --listextended
 
@@ -400,6 +403,44 @@ def processCustomArgs(
     return args[0], speed, color_list
 
 
+def processSegmentArgs(
+    parser: OptionParser, args: str
+) -> list[tuple[int, int, int] | None] | None:
+    """Process custom segment colors arguments.
+
+    Returns: List of up to 20 RGB tuples or None for off segments.
+    """
+    try:
+        color_list_str = args.strip()
+        str_list = color_list_str.split(" ")
+        segment_list: list[tuple[int, int, int] | None] = []
+        for s in str_list:
+            s = s.strip().lower()
+            if not s:
+                continue
+            if s == "off":
+                segment_list.append(None)
+            else:
+                c = utils.color_object_to_tuple(s)
+                if c is not None and len(c) >= 3:
+                    segment_list.append((c[0], c[1], c[2]))
+                else:
+                    raise ValueError(f"Invalid color: {s}")
+        if len(segment_list) == 0:
+            parser.error("At least one segment color is required")
+            return None
+        if len(segment_list) > 20:
+            print("Warning: More than 20 segments provided, truncating to 20")
+            segment_list = segment_list[:20]
+        return segment_list
+    except Exception as e:
+        parser.error(
+            f"SEGMENTLIST isn't formatted right: {e}. "
+            "It should be a space-separated list of color names, hex values, RGB triples, or 'off'"
+        )
+        return None
+
+
 def processExtendedArgs(
     parser: OptionParser, args: Any, direction: str, colorchange: bool
 ) -> tuple[int, int, int, list[tuple[int, int, int]], int, int] | None:
@@ -642,6 +683,17 @@ def parseArgs() -> tuple[Values, Any]:
         + "COLORLIST is space-separated colors (1-8 colors). "
         + "Use --direction and --colorchange for additional options.",
     )
+    mode_group.add_option(
+        "-G",
+        "--segments",
+        dest="segments",
+        metavar="SEGMENTLIST",
+        default=None,
+        help="Set custom segment colors (0xB6 devices). "
+        + "SEGMENTLIST is a space-separated list of up to 20 colors. "
+        + "Use 'off' for segments that should be off. "
+        + "Example: 'red green blue off off red'",
+    )
     parser.add_option_group(mode_group)
 
     other_group.add_option(
@@ -777,9 +829,11 @@ def parseArgs() -> tuple[Values, Any]:
         mode_count += 1
     if options.extended:
         mode_count += 1
+    if options.segments:
+        mode_count += 1
     if mode_count > 1:
         parser.error(
-            "options --color, --*white, --preset, --CCT, --custom, and --extended are mutually exclusive"
+            "options --color, --*white, --preset, --CCT, --custom, --extended, and --segments are mutually exclusive"
         )
 
     if options.on and options.off:
@@ -792,6 +846,9 @@ def parseArgs() -> tuple[Values, Any]:
         options.extended = processExtendedArgs(
             parser, options.extended, options.direction, options.colorchange
         )
+
+    if options.segments:
+        options.segments = processSegmentArgs(parser, options.segments)
 
     if options.color:
         options.color = utils.color_object_to_tuple(options.color)
@@ -957,6 +1014,18 @@ async def _async_run_commands(
         await bulb.async_set_extended_custom_effect(
             pattern_id, colors, speed, density, direction, option
         )
+
+    elif options.segments is not None:
+        if not bulb.supports_extended_custom_effects:
+            raise ValueError(
+                f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
+                "does not support custom segment colors. "
+                "This feature is only available on 0xB6 devices."
+            )
+        buf_in(
+            f"Setting custom segment colors: {len(options.segments)} segments"
+        )
+        await bulb.async_set_custom_segment_colors(options.segments)
 
     if options.on:
         buf_in(f"Turning on bulb at {bulb.ipaddr}")

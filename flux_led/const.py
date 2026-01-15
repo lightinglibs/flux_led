@@ -75,10 +75,16 @@ class ExtendedCustomEffectDirection(Enum):
 
 
 class ExtendedCustomEffectOption(Enum):
-    """Option values for extended custom effects."""
+    """Option values for extended custom effects.
+
+    The meaning varies by pattern:
+    - Some patterns: DEFAULT=static color, VARIANT_1=color change
+    - Rainbow patterns: DEFAULT=strobe, VARIANT_1=twinkle, VARIANT_2=breathe
+    """
 
     DEFAULT = 0x00
-    COLOR_CHANGE = 0x01
+    VARIANT_1 = 0x01
+    VARIANT_2 = 0x02
 
 
 DEFAULT_WHITE_CHANNEL_TYPE: Final = WhiteChannelType.WARM
