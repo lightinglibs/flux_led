@@ -1756,11 +1756,38 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
     """Protocol for devices with extended state format (0xEA 0x81) and custom effects.
 
-    Used by devices like Surplife Outdoor Permanent Lighting (0xB6).
+    Used by devices like Surplife Outdoor Permanent Lighting (0xB6) with RGBW LEDs.
     This protocol:
     - ONLY responds with extended state format (0xEA 0x81, 20+ bytes)
     - Supports extended custom effect commands (0xE1 0x21, 0xE1 0x22)
-    - Uses HSV color format for effects
+    - Uses HSV+W color format: [H/2, S, V, 0x00, W] (5 bytes per color)
+    - Parent's 0xE0 command works for RGB but NOT for white/CCT
+    - Uses 0xE1 0x21 STATIC_FILL (0x66) for solid RGBW colors
+
+    Extended state response format (0xEA 0x81, 21+ bytes):
+      pos  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 ...
+          EA 81 01 00 MN VN PW PP MD SP ?? HH SS VV WT WB ...
+                      |  |  |  |  |  |     |  |  |  |  |
+                      |  |  |  |  |  |     |  |  |  |  white brightness (0-100)
+                      |  |  |  |  |  |     |  |  |  white temp (0-100, 0xFF=off)
+                      |  |  |  |  |  |     |  |  value (0-100)
+                      |  |  |  |  |  |     |  saturation (0-100)
+                      |  |  |  |  |  |     hue/2 (0-180)
+                      |  |  |  |  |  speed (0-100)
+                      |  |  |  |  mode/pattern ID (when PP=0x25)
+                      |  |  |  preset_pattern (0x25=custom effect)
+                      |  |  power state (0x23=ON, 0x24=OFF)
+                      |  version number
+                      model number (0xB6)
+
+    RGBW color format in 0xE1 0x21 command:
+      [H/2, S, V, 0x00, W]
+       |    |  |   |    |
+       |    |  |   |    white LED brightness (0-255)
+       |    |  |   unused in 0xB6 (always 0x00)
+       |    |  value/brightness (0-100)
+       |    saturation (0-100)
+       hue/2 (0-180, divide actual hue by 2)
     """
 
     @property
@@ -1860,6 +1887,108 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             return LEDENETRawState(*converted_state)
         # Already standard 14-byte format
         return LEDENETRawState(*raw_state)
+
+    def _rgb_to_hsv_bytes_rgbw(
+        self, r: int, g: int, b: int, white: int = 0
+    ) -> list[int]:
+        """Convert RGBW (0-255) to 5-byte HSVW format for extended effect commands.
+
+        Output format:
+          [H/2, S, V, 0x00, W]
+           0    1  2   3    4
+           |    |  |   |    white LED brightness (0-255)
+           |    |  |   unused (always 0x00)
+           |    |  value/brightness (0-100)
+           |    saturation (0-100)
+           hue divided by 2 (0-180)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+            white: White LED brightness (0-255)
+
+        Returns:
+            5-byte list [H/2, S, V, 0x00, W]
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, white]
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode | int,
+    ) -> list[bytearray]:
+        """Construct level change using 0xE1 0x21 STATIC_FILL command.
+
+        The parent's 0xE0 wrapped command works for RGB but not for CCT/white.
+        This override uses extended custom effect command (0xE1 0x21) with
+        STATIC_FILL pattern (0x66) which supports both RGB and white.
+
+        Inner message format (before wrapping):
+          pos  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
+              E1 21 00 64 66 00 01 32 32 00 00 00 00 00 00 01 HH SS VV 00 WW
+                        |  |  |  |  |  |                    |  |  |  |  |  |
+                        |  |  |  |  |  |                    |  |  |  |  |  white (0-255)
+                        |  |  |  |  |  |                    |  |  |  |  unused
+                        |  |  |  |  |  |                    |  |  |  value (0-100)
+                        |  |  |  |  |  |                    |  |  saturation (0-100)
+                        |  |  |  |  |  |                    |  hue/2 (0-180)
+                        |  |  |  |  |  |                    color count (1)
+                        |  |  |  |  |  reserved (6 bytes, all 0x00)
+                        |  |  |  |  speed (0x32 = 50)
+                        |  |  |  density (0x32 = 50)
+                        |  |  direction (0x01 = L->R)
+                        |  option (0x00 = default)
+                        pattern ID (0x66 = STATIC_FILL)
+
+        Note: Device has single white LED, so warm_white and cool_white
+        are combined into one brightness value.
+        """
+        # STATIC_FILL pattern ID
+        STATIC_FILL = 0x66
+
+        r = red or 0
+        g = green or 0
+        b = blue or 0
+
+        # Combine warm and cool white into single white brightness
+        # (device only has one white LED)
+        w = min((warm_white or 0) + (cool_white or 0), 255)
+
+        # Build extended custom effect command with RGBW support
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                STATIC_FILL,  # Pattern ID
+                0x00,  # Option
+                0x01,  # Direction (L->R)
+                0x32,  # Density (50)
+                0x32,  # Speed (50)
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                0x01,  # Color count (1)
+            ]
+        )
+
+        # Add RGBW color as HSV with white in 5th byte
+        msg.extend(self._rgb_to_hsv_bytes_rgbw(r, g, b, w))
+
+        return [self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )]
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
