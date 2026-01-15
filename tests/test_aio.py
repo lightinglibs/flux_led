@@ -42,6 +42,7 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     LEDENETRawState,
     PowerRestoreState,
@@ -50,6 +51,7 @@ from flux_led.protocol import (
     ProtocolLEDENET25Byte,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     RemoteConfig,
 )
 from flux_led.scanner import (
@@ -4354,9 +4356,11 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
 
     assert light.model_num == 0xB6
     assert light.version_num == 1
-    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
     assert "Surplife" in light.model
     assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
+    assert light.supports_extended_custom_effects is True
+    assert light.microphone is True
 
 
 def test_protocol_extended_state_validation_0xB6():
@@ -4402,6 +4406,35 @@ def test_protocol_extended_state_validation_0xB6():
     # Test extended_state_to_state default implementation (line 1055)
     # ProtocolLEDENET8Byte uses the default implementation which just returns raw_state
     assert protocol_8byte.extended_state_to_state(extended_state) == extended_state
+
+    # Test ProtocolLEDENETExtendedCustom - dedicated protocol for 0xB6
+    protocol_extended = ProtocolLEDENETExtendedCustom()
+    assert protocol_extended.name == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+    # This protocol ONLY accepts extended state format
+    assert protocol_extended.is_valid_state_response(extended_state) is True
+
+    # Test that ProtocolLEDENETExtendedCustom rejects standard 14-byte state
+    # This is a minimal standard state (without valid checksum) - just for format testing
+    standard_state = bytes(
+        (
+            0x81,  # Standard state header
+            0xB6,  # Model
+            0x23,  # Power on
+            0x61,  # Mode
+            0x00,
+            0x64,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+        )
+    )
+    # ProtocolLEDENETExtendedCustom should reject standard state (only accepts 0xEA 0x81)
+    assert protocol_extended.is_valid_state_response(standard_state) is False
 
 
 # Extended Custom Effect Tests (for devices with supports_extended_custom_effects=True)

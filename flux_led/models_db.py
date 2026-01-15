@@ -20,10 +20,6 @@ from .const import (
     STATE_WARM_WHITE,
 )
 from .protocol import (
-    LEDENET_EXTENDED_STATE_MODEL_POS,
-    LEDENET_EXTENDED_STATE_VERSION_POS,
-    LEDENET_STATE_MODEL_POS,
-    LEDENET_STATE_VERSION_POS,
     A1_NUM_TO_OPERATING_MODE,
     A1_NUM_TO_PROTOCOL,
     A1_OPERATING_MODE_TO_NUM,
@@ -34,6 +30,10 @@ from .protocol import (
     A2_PROTOCOL_TO_NUM,
     ADDRESSABLE_RGB_NUM_TO_WIRING,
     ADDRESSABLE_RGB_WIRING_TO_NUM,
+    LEDENET_EXTENDED_STATE_MODEL_POS,
+    LEDENET_EXTENDED_STATE_VERSION_POS,
+    LEDENET_STATE_MODEL_POS,
+    LEDENET_STATE_VERSION_POS,
     NEW_ADDRESSABLE_NUM_TO_OPERATING_MODE,
     NEW_ADDRESSABLE_NUM_TO_PROTOCOL,
     NEW_ADDRESSABLE_OPERATING_MODE_TO_NUM,
@@ -51,6 +51,7 @@ from .protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_CCT,
     PROTOCOL_LEDENET_CCT_WRAPPED,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_SOCKET,
@@ -1332,12 +1333,11 @@ MODELS = [
         # preset pattern commands (0x61...) and custom effect commands (0x51...) do
         # not work and will never work on this device.
         always_writes_white_and_colors=False,
-        protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_25BYTE)],
+        protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_EXTENDED_CUSTOM)],
         mode_to_color_mode={0x01: COLOR_MODES_RGB_CCT, 0x17: COLOR_MODES_RGB_CCT},
         color_modes=COLOR_MODES_RGB_CCT,
         channel_map={},
-        microphone=False,
-        supports_extended_custom_effects=True,
+        microphone=True,
         device_config=IMMUTABLE_DEVICE_CONFIG,
     ),
     LEDENETModel(

@@ -516,7 +516,7 @@ def processExtendedArgs(
     # Option value
     option_value = 0x01 if colorchange else 0x00
 
-    return pattern_id, speed, density, color_list, dir_value, option_value
+    return pattern_id, speed, density, color_list, dir_value.value, option_value
 
 
 def parseArgs() -> tuple[Values, Any]:

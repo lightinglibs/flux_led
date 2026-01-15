@@ -33,6 +33,7 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
     PROTOCOL_LEDENET_ADDRESSABLE_A2,
     PROTOCOL_LEDENET_ADDRESSABLE_A3,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_SOCKET,
@@ -1434,23 +1435,26 @@ class TestLight(unittest.TestCase):
             calls += 1
             if calls == 1:
                 self.assertEqual(expected, 2)
-                return bytearray(b"\x81\xb6")  # Model 0xB6
+                # 0xB6 device returns extended state format (0xEA 0x81)
+                return bytearray(b"\xea\x81")
             if calls == 2:
-                # Sync API reads fixed state_response_length bytes (12 for this protocol).
-                # Real 0xB6 device responds with extended state (0xEA 0x81, 21 bytes).
-                # Extended state handling is tested in test_aio.py:test_setup_0xB6_surplife.
-                # This test validates model detection and protocol assignment from models_db.
-                self.assertEqual(expected, 12)
-                return bytearray(b"\x23\x61\x24\x64\x00\x00\x00\x00\x01\x00\xf0\x34")
+                # Extended state: 21 bytes total, first 2 already read
+                # Format: EA 81 01 00 B6 01 23 61 00 64 0F 00 00 00 64 64 00 00 00 00 CS
+                self.assertEqual(expected, 19)
+                return bytearray(
+                    b"\x01\x00\xb6\x01\x23\x61\x00\x64\x0f\x00\x00\x00\x64\x64\x00\x00\x00\x00\x83"
+                )
 
         mock_read.side_effect = read_data
         light = flux_led.WifiLedBulb("192.168.1.164")
 
         assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
-        self.assertEqual(light.protocol, PROTOCOL_LEDENET_25BYTE)
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
         self.assertEqual(light.model_num, 0xB6)
         self.assertEqual(light.version_num, 1)
         assert "Surplife" in light.model
+        assert light.supports_extended_custom_effects is True
+        self.assertEqual(light.microphone, True)
 
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")

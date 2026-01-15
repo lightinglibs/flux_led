@@ -49,6 +49,7 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_RED,
     STATE_WARM_WHITE,
     STATIC_MODES,
+    ExtendedCustomEffectPattern,
     WhiteChannelType,
 )
 from .models_db import (
@@ -92,6 +93,7 @@ from .protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_CCT,
     PROTOCOL_LEDENET_CCT_WRAPPED,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_ORIGINAL_RGBW,
@@ -112,6 +114,7 @@ from .protocol import (
     ProtocolLEDENETAddressableChristmas,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETOriginal,
     ProtocolLEDENETOriginalCCT,
     ProtocolLEDENETOriginalRGBW,
@@ -145,6 +148,7 @@ PROTOCOL_TYPES = Union[
     ProtocolLEDENET9ByteAutoOn,
     ProtocolLEDENET9ByteDimmableEffects,
     ProtocolLEDENET25Byte,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETAddressableA1,
     ProtocolLEDENETAddressableA2,
     ProtocolLEDENETAddressableA3,
@@ -189,6 +193,7 @@ PROTOCOL_NAME_TO_CLS = {
     PROTOCOL_LEDENET_9BYTE_AUTO_ON: ProtocolLEDENET9ByteAutoOn,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS: ProtocolLEDENET9ByteDimmableEffects,
     PROTOCOL_LEDENET_25BYTE: ProtocolLEDENET25Byte,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM: ProtocolLEDENETExtendedCustom,
     PROTOCOL_LEDENET_ADDRESSABLE_A3: ProtocolLEDENETAddressableA3,
     PROTOCOL_LEDENET_ADDRESSABLE_A2: ProtocolLEDENETAddressableA2,
     PROTOCOL_LEDENET_ADDRESSABLE_A1: ProtocolLEDENETAddressableA1,
@@ -643,15 +648,13 @@ class LEDENETDevice:
     @property
     def supports_extended_custom_effects(self) -> bool:
         """Return True if device supports extended custom effects."""
-        return self.model_data.supports_extended_custom_effects
+        return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
 
     @property
     def extended_custom_effect_pattern_list(self) -> list[str] | None:
         """Return available extended custom effect patterns, or None if not supported."""
         if not self.supports_extended_custom_effects:
             return None
-        from .const import ExtendedCustomEffectPattern
-
         return [p.name.lower().replace("_", " ") for p in ExtendedCustomEffectPattern]
 
     @property
@@ -1353,6 +1356,7 @@ class LEDENETDevice:
                     raise ValueError(f"Color values must be 0-255, got {c}")
 
         assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENET25Byte)
         return self._protocol.construct_extended_custom_effect(
             pattern_id, colors, speed, density, direction, option
         )
@@ -1386,6 +1390,7 @@ class LEDENETDevice:
                     raise ValueError(f"Color values must be 0-255, got {c}")
 
         assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENET25Byte)
         return self._protocol.construct_custom_segment_colors(segments)
 
     def _effect_to_pattern(self, effect: str) -> int:

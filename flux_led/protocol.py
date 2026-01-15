@@ -97,6 +97,7 @@ PROTOCOL_LEDENET_CCT = "LEDENET_CCT"
 PROTOCOL_LEDENET_CCT_WRAPPED = "LEDENET_CCT_WRAPPED"
 PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS = "LEDENET_CHRISTMAS"
 PROTOCOL_LEDENET_25BYTE = "LEDENET_25_BYTE"
+PROTOCOL_LEDENET_EXTENDED_CUSTOM = "LEDENET_EXTENDED_CUSTOM"
 
 TRANSITION_BYTES = {
     TRANSITION_JUMP: 0x3B,
@@ -109,6 +110,7 @@ LEDNET_MUSIC_MODE_RESPONSE_LEN = 13  # 72 01 26 01 00 00 00 00 00 00 64 64 62
 LEDENET_POWER_RESTORE_RESPONSE_LEN = 7
 LEDENET_ORIGINAL_STATE_RESPONSE_LEN = 11
 LEDENET_STATE_RESPONSE_LEN = 14
+LEDENET_EXTENDED_STATE_RESPONSE_LEN = 21
 LEDENET_POWER_RESPONSE_LEN = 4
 LEDENET_ADDRESSABLE_STATE_RESPONSE_LEN = 25
 LEDENET_A1_DEVICE_CONFIG_RESPONSE_LEN = 12
@@ -1533,17 +1535,9 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         blue = min(int(max(0, b_f) * 255), 255)
 
         # Fill standard state structure
-        # For devices with extended custom effects, when preset_pattern is 0x25 (custom
-        # pattern mode), position 8 contains the actual pattern ID (1-22, 101-102)
-        # which should be stored in 'mode' for proper effect identification.
+        # Note: For devices with extended custom effects (ProtocolLEDENETExtendedCustom),
+        # the child class overrides this method to handle mode extraction from position 8.
         mode = 0
-        if preset_pattern == 0x25:
-            # Lazy import to avoid circular dependency
-            from .models_db import get_model
-
-            model_data = get_model(model_num)
-            if model_data.supports_extended_custom_effects:
-                mode = raw_state[8]  # Extended custom effect pattern ID
         color_mode = 0
         check_sum = 0  # Set to 0; not critical
 
@@ -1748,14 +1742,124 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
 
         for i in range(20):
-            if i < len(segments) and segments[i] and segments[i] != (0, 0, 0):
-                msg.extend(self._rgb_to_hsv_bytes(*segments[i]))
+            segment = segments[i] if i < len(segments) else None
+            if segment and segment != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segment))
             else:
                 msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
 
         return self.construct_wrapped_message(
             msg, inner_pre_constructed=True, version=0x02
         )
+
+
+class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
+    """Protocol for devices with extended state format (0xEA 0x81) and custom effects.
+
+    Used by devices like Surplife Outdoor Permanent Lighting (0xB6).
+    This protocol:
+    - ONLY responds with extended state format (0xEA 0x81, 20+ bytes)
+    - Supports extended custom effect commands (0xE1 0x21, 0xE1 0x22)
+    - Uses HSV color format for effects
+    """
+
+    @property
+    def name(self) -> str:
+        """The name of the protocol."""
+        return PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    @property
+    def state_response_length(self) -> int:
+        """The length of the query response.
+
+        Extended state format is 21 bytes (0xEA 0x81 + 19 bytes).
+        """
+        return LEDENET_EXTENDED_STATE_RESPONSE_LEN
+
+    def is_valid_state_response(self, raw_state: bytes) -> bool:
+        """Check if a state response is valid.
+
+        This protocol ONLY accepts extended state format (0xEA 0x81).
+        """
+        return self.is_valid_extended_state_response(raw_state)
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert extended state to standard state format.
+
+        For this protocol, extended state mode (position 8) always contains
+        the custom effect pattern ID when preset_pattern is 0x25.
+        No model lookup needed since this protocol always supports extended effects.
+        """
+        if len(raw_state) < 20:
+            return b""
+
+        model_num = raw_state[4]
+        version_number = raw_state[5]
+        power_state = raw_state[6]
+        preset_pattern = raw_state[7]
+        speed = raw_state[9]
+
+        hue = raw_state[11]
+        saturation = raw_state[12]
+        value = raw_state[13]
+
+        white_temp = raw_state[14]
+        white_brightness = raw_state[15]
+
+        if white_temp > 100 or white_brightness == 0:
+            cool_white = 0
+            warm_white = 0
+        else:
+            levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
+            cool_white = levels.cool_white
+            warm_white = levels.warm_white
+
+        # Convert HSV to RGB
+        h = (hue * 2) / 360
+        s = saturation / 100
+        v = value / 100
+        r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
+        red = min(int(max(0, r_f) * 255), 255)
+        green = min(int(max(0, g_f) * 255), 255)
+        blue = min(int(max(0, b_f) * 255), 255)
+
+        # For this protocol, mode always contains the effect pattern ID
+        # when in custom pattern mode (preset_pattern == 0x25)
+        mode = raw_state[8] if preset_pattern == 0x25 else 0
+        color_mode = 0
+        check_sum = 0
+
+        return bytes(
+            (
+                raw_state[1],  # Head (0x81)
+                model_num,
+                power_state,
+                preset_pattern,
+                mode,
+                speed,
+                red,
+                green,
+                blue,
+                warm_white,
+                version_number,
+                cool_white,
+                color_mode,
+                check_sum,
+            )
+        )
+
+    def named_raw_state(self, raw_state: bytes) -> LEDENETRawState:
+        """Convert raw_state to a namedtuple.
+
+        For extended state format (0xEA 0x81), convert to standard 14-byte format first.
+        If already in standard format (14 bytes starting with 0x81), use directly.
+        """
+        # Check if this is extended state format (0xEA 0x81)
+        if len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81:
+            converted_state = self.extended_state_to_state(raw_state)
+            return LEDENETRawState(*converted_state)
+        # Already standard 14-byte format
+        return LEDENETRawState(*raw_state)
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
