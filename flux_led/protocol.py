@@ -1986,9 +1986,11 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         # Add RGBW color as HSV with white in 5th byte
         msg.extend(self._rgb_to_hsv_bytes_rgbw(r, g, b, w))
 
-        return [self.construct_wrapped_message(
-            msg, inner_pre_constructed=True, version=0x02
-        )]
+        return [
+            self.construct_wrapped_message(
+                msg, inner_pre_constructed=True, version=0x02
+            )
+        ]
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

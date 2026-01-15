@@ -460,9 +460,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         Args:
             segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
         """
-        await self._async_send_msg(
-            self._generate_custom_segment_colors(segments)
-        )
+        await self._async_send_msg(self._generate_custom_segment_colors(segments))
 
     async def async_set_effect(
         self, effect: str, speed: int, brightness: int = 100

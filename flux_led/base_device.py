@@ -1374,9 +1374,7 @@ class LEDENETDevice:
         """
         # Truncate if more than 20 segments
         if len(segments) > 20:
-            _LOGGER.warning(
-                "Too many segments (%s), truncating to 20", len(segments)
-            )
+            _LOGGER.warning("Too many segments (%s), truncating to 20", len(segments))
             segments = segments[:20]
 
         # Validate color tuples

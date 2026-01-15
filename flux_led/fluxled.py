@@ -1002,10 +1002,16 @@ async def _async_run_commands(
         pattern_id, speed, density, colors, direction, option = options.extended
         # Get pattern name for display
         try:
-            pattern_name = ExtendedCustomEffectPattern(pattern_id).name.lower().replace("_", " ")
+            pattern_name = (
+                ExtendedCustomEffectPattern(pattern_id).name.lower().replace("_", " ")
+            )
         except ValueError:
             pattern_name = f"pattern {pattern_id}"
-        dir_name = "L->R" if direction == ExtendedCustomEffectDirection.LEFT_TO_RIGHT else "R->L"
+        dir_name = (
+            "L->R"
+            if direction == ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+            else "R->L"
+        )
         buf_in(
             f"Setting extended effect: {pattern_name}, "
             f"Speed={speed}%, Density={density}%, Direction={dir_name}, "
@@ -1022,9 +1028,7 @@ async def _async_run_commands(
                 "does not support custom segment colors. "
                 "This feature is only available on 0xB6 devices."
             )
-        buf_in(
-            f"Setting custom segment colors: {len(options.segments)} segments"
-        )
+        buf_in(f"Setting custom segment colors: {len(options.segments)} segments")
         await bulb.async_set_custom_segment_colors(options.segments)
 
     if options.on:
