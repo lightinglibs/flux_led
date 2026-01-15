@@ -1032,29 +1032,13 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a message is the start of a state response."""
         return _message_type_from_start_of_msg(data) == MSG_POWER_STATE
 
-    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
-        """Check if this is an extended state response (0xEA 0x81 format)."""
-        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
-
     def is_valid_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
-        # Check for extended state format (0xEA 0x81) used by 25BYTE protocol
-        if self.is_valid_extended_state_response(raw_state):
-            return True
-        # Check for standard state format (0x81)
         if len(raw_state) != self.state_response_length:
             return False
         if raw_state[0] != 129:
             return False
         return self.is_checksum_correct(raw_state)
-
-    def extended_state_to_state(self, raw_state: bytes) -> bytes:
-        """Convert an extended state response to a standard state response.
-
-        This is overridden by ProtocolLEDENET25Byte with the actual conversion logic.
-        """
-        # Default implementation for protocols that don't use extended state
-        return raw_state
 
     def construct_state_change(self, turn_on: int) -> bytearray:
         """
@@ -1461,17 +1445,9 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
 
-    def is_valid_state_response(self, raw_state: bytes) -> bool:
-        """Check if a state response is valid."""
-        # This protocol can respond with either standard 0x81 format or extended 0xEA 0x81 format
-        if self.is_valid_extended_state_response(raw_state):
-            return True
-        # Fall back to parent class check for standard 0x81 responses
-        return super().is_valid_state_response(raw_state)
-
     def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
-        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
+        return raw_state[0] == 0xEA and raw_state[1] == 0x81 and len(raw_state) >= 20
 
     def extended_state_to_state(self, raw_state: bytes) -> bytes:
         """Convert an extended state response to a state response."""
@@ -1514,16 +1490,10 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
 
         white_temp = raw_state[14]
         white_brightness = raw_state[15]
+        levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
 
-        # When in custom pattern mode or RGB mode, white_temp may be 0xFF (255)
-        # In this case, there are no white channels active
-        if white_temp > 100 or white_brightness == 0:
-            cool_white = 0
-            warm_white = 0
-        else:
-            levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
-            cool_white = levels.cool_white
-            warm_white = levels.warm_white
+        cool_white = levels.cool_white
+        warm_white = levels.warm_white
 
         # Convert HSV to RGB
         h = (hue * 2) / 360
@@ -1535,8 +1505,6 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         blue = min(int(max(0, b_f) * 255), 255)
 
         # Fill standard state structure
-        # Note: For devices with extended custom effects (ProtocolLEDENETExtendedCustom),
-        # the child class overrides this method to handle mode extraction from position 8.
         mode = 0
         color_mode = 0
         check_sum = 0  # Set to 0; not critical
@@ -1634,123 +1602,6 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                 version=0x02,
             )
         ]
-
-    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
-        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
-
-        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
-        """
-        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        return [int(h * 180), int(s * 100), int(v * 100), 0x00, 0x00]
-
-    def construct_extended_custom_effect(
-        self,
-        pattern_id: int,
-        colors: list[tuple[int, int, int]],
-        speed: int = 50,
-        density: int = 50,
-        direction: int = 0x01,
-        option: int = 0x00,
-    ) -> bytearray:
-        """Construct an extended custom effect command.
-
-        Protocol format:
-          0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
-         e1 21 00 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
-                    |  |  |  |  |                    |  colors (5 bytes each)
-                    |  |  |  |  |                    color count
-                    |  |  |  |  speed (0-100)
-                    |  |  |  density (0-100)
-                    |  |  direction (01=L->R, 02=R->L)
-                    |  option (00=default, 01=color change)
-                    pattern_id (1-24 or 101-102)
-
-        Args:
-            pattern_id: Pattern ID 1-24 or 101-102
-            colors: List of 1-8 RGB color tuples (0-255 per channel)
-            speed: Animation speed 0-100 (default 50)
-            density: Pattern density 0-100 (default 50)
-            direction: 0x01=L->R, 0x02=R->L (default L->R)
-            option: Pattern-specific option (default 0)
-
-        Returns:
-            Wrapped command bytearray
-        """
-        # Clamp values to valid range
-        speed = max(0, min(100, speed))
-        density = max(0, min(100, density))
-
-        # Convert Enum to value if needed
-        if hasattr(pattern_id, "value"):
-            pattern_id = pattern_id.value
-        if hasattr(option, "value"):
-            option = option.value
-        if hasattr(direction, "value"):
-            direction = direction.value
-
-        # Build inner message
-        msg = bytearray(
-            [
-                0xE1,
-                0x21,
-                0x00,  # Command type
-                0x64,  # Constant (100)
-                pattern_id,
-                option,
-                direction,
-                density,
-                speed,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x00,  # Reserved (6 bytes)
-                len(colors),  # Color count
-            ]
-        )
-
-        # Add colors as HSV (5 bytes each)
-        for r, g, b in colors:
-            msg.extend(self._rgb_to_hsv_bytes(r, g, b))
-
-        return self.construct_wrapped_message(
-            msg, inner_pre_constructed=True, version=0x02
-        )
-
-    def construct_custom_segment_colors(
-        self,
-        segments: list[tuple[int, int, int] | None],
-    ) -> bytearray:
-        """Construct a custom segment colors command (0xE1 0x22).
-
-        Sets static HSV colors for each of 20 segments on the light strip.
-        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
-
-        Protocol format:
-          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
-
-        Args:
-            segments: List of up to 20 segment colors. Each segment is either:
-                - None or (0, 0, 0) for off
-                - (R, G, B) tuple with values 0-255
-
-        Returns:
-            Wrapped command bytearray
-        """
-        # Build inner message: header + 20 segments
-        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
-
-        for i in range(20):
-            segment = segments[i] if i < len(segments) else None
-            if segment and segment != (0, 0, 0):
-                msg.extend(self._rgb_to_hsv_bytes(*segment))
-            else:
-                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
-
-        return self.construct_wrapped_message(
-            msg, inner_pre_constructed=True, version=0x02
-        )
 
 
 class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
@@ -1991,6 +1842,123 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
                 msg, inner_pre_constructed=True, version=0x02
             )
         ]
+
+    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
+        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
+
+        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, 0x00]
+
+    def construct_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Construct an extended custom effect command.
+
+        Protocol format:
+          0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
+         e1 21 00 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
+                    |  |  |  |  |                    |  colors (5 bytes each)
+                    |  |  |  |  |                    color count
+                    |  |  |  |  speed (0-100)
+                    |  |  |  density (0-100)
+                    |  |  direction (01=L->R, 02=R->L)
+                    |  option (00=default, 01=color change)
+                    pattern_id (1-24 or 101-102)
+
+        Args:
+            pattern_id: Pattern ID 1-24 or 101-102
+            colors: List of 1-8 RGB color tuples (0-255 per channel)
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: 0x01=L->R, 0x02=R->L (default L->R)
+            option: Pattern-specific option (default 0)
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Clamp values to valid range
+        speed = max(0, min(100, speed))
+        density = max(0, min(100, density))
+
+        # Convert Enum to value if needed
+        if hasattr(pattern_id, "value"):
+            pattern_id = pattern_id.value
+        if hasattr(option, "value"):
+            option = option.value
+        if hasattr(direction, "value"):
+            direction = direction.value
+
+        # Build inner message
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                pattern_id,
+                option,
+                direction,
+                density,
+                speed,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                len(colors),  # Color count
+            ]
+        )
+
+        # Add colors as HSV (5 bytes each)
+        for r, g, b in colors:
+            msg.extend(self._rgb_to_hsv_bytes(r, g, b))
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Construct a custom segment colors command (0xE1 0x22).
+
+        Sets static HSV colors for each of 20 segments on the light strip.
+        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
+
+        Protocol format:
+          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
+
+        Args:
+            segments: List of up to 20 segment colors. Each segment is either:
+                - None or (0, 0, 0) for off
+                - (R, G, B) tuple with values 0-255
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Build inner message: header + 20 segments
+        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+
+        for i in range(20):
+            segment = segments[i] if i < len(segments) else None
+            if segment and segment != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segment))
+            else:
+                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
