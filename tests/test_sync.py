@@ -1459,6 +1459,79 @@ class TestLight(unittest.TestCase):
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
     @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setExtendedCustomEffect(self, mock_connect, mock_read, mock_send):
+        """Test sync setExtendedCustomEffect for 0xB6 device."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 19)
+                return bytearray(
+                    b"\x01\x00\xb6\x01\x23\x61\x00\x64\x0f\x00\x00\x00\x64\x64\x00\x00\x00\x00\x83"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+
+        # Call setExtendedCustomEffect
+        light.setExtendedCustomEffect(
+            pattern_id=1,
+            colors=[(255, 0, 0), (0, 255, 0)],
+            speed=50,
+            density=50,
+        )
+
+        # Verify _send_msg was called
+        assert mock_send.called
+        sent_data = mock_send.call_args[0][0]
+        # Verify it's a wrapped message
+        assert sent_data[0] == 0xB0
+        assert sent_data[1] == 0xB1
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setCustomSegmentColors(self, mock_connect, mock_read, mock_send):
+        """Test sync setCustomSegmentColors for 0xB6 device."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 19)
+                return bytearray(
+                    b"\x01\x00\xb6\x01\x23\x61\x00\x64\x0f\x00\x00\x00\x64\x64\x00\x00\x00\x00\x83"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+
+        # Call setCustomSegmentColors
+        light.setCustomSegmentColors(segments=[(255, 0, 0), None, (0, 0, 255)])
+
+        # Verify _send_msg was called
+        assert mock_send.called
+        sent_data = mock_send.call_args[0][0]
+        # Verify it's a wrapped message
+        assert sent_data[0] == 0xB0
+        assert sent_data[1] == 0xB1
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
     def test_rgbcw_bulb_v9(self, mock_connect, mock_read, mock_send):
         calls = 0
 

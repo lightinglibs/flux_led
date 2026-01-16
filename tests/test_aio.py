@@ -37,7 +37,9 @@ from flux_led.const import (
     MultiColorEffects,
     WhiteChannelType,
 )
+from flux_led.models_db import extract_model_version_from_state
 from flux_led.protocol import (
+    LEDENET_EXTENDED_STATE_RESPONSE_LEN,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
@@ -4689,3 +4691,813 @@ def test_extended_custom_effect_hsv_values():
     assert hsv_h == 60  # Green hue (120/2)
     assert hsv_s == 100
     assert hsv_v == 100
+
+
+# Tests for _generate_extended_custom_effect validation (base_device.py lines 1335-1360)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_validation(mock_aio_protocol):
+    """Test validation in _generate_extended_custom_effect."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # Setup 0xB6 device with extended state
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    # Test invalid pattern_id (0 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-24 or 101-102"):
+        light._generate_extended_custom_effect(0, [(255, 0, 0)])
+
+    # Test invalid pattern_id (25 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-24 or 101-102"):
+        light._generate_extended_custom_effect(25, [(255, 0, 0)])
+
+    # Test empty colors list
+    with pytest.raises(ValueError, match="at least one color"):
+        light._generate_extended_custom_effect(1, [])
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_extended_custom_effect(1, [(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_extended_custom_effect(1, [(256, 0, 0)])
+
+    # Test color values out of range (< 0)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_extended_custom_effect(1, [(-1, 0, 0)])
+
+    # Test valid pattern_id 101 (STATIC_GRADIENT)
+    result = light._generate_extended_custom_effect(101, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+    # Test valid pattern_id 102 (STATIC_FILL)
+    result = light._generate_extended_custom_effect(102, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_truncate_colors(
+    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+):
+    """Test that too many colors (>8) are truncated with warning."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # 10 colors (more than 8 max)
+    colors = [(i * 25, 0, 0) for i in range(10)]
+
+    with caplog.at_level(logging.WARNING):
+        result = light._generate_extended_custom_effect(1, colors)
+
+    assert isinstance(result, bytearray)
+    assert "truncating" in caplog.text.lower()
+
+
+# Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_validation(mock_aio_protocol):
+    """Test validation in _generate_custom_segment_colors."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_custom_segment_colors([(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_custom_segment_colors([(256, 0, 0)])
+
+    # Test valid segments with None
+    result = light._generate_custom_segment_colors([None, (255, 0, 0), None])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_truncate(
+    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+):
+    """Test that too many segments (>20) are truncated with warning."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # 25 segments (more than 20 max)
+    segments = [(i * 10, 0, 0) for i in range(25)]
+
+    with caplog.at_level(logging.WARNING):
+        result = light._generate_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+    assert "truncating" in caplog.text.lower()
+
+
+# Tests for construct_levels_change (protocol.py lines 1826-1861)
+
+
+def test_protocol_construct_levels_change_0xB6():
+    """Test construct_levels_change uses STATIC_FILL for 0xB6 protocol."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with RGB values
+    result = proto.construct_levels_change(
+        persist=1,
+        red=255,
+        green=0,
+        blue=0,
+        warm_white=0,
+        cool_white=0,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+    # Check wrapper header
+    assert msg[0] == 0xB0
+    assert msg[1] == 0xB1
+    assert msg[2] == 0xB2
+    assert msg[3] == 0xB3
+
+
+def test_protocol_construct_levels_change_with_white():
+    """Test construct_levels_change combines warm and cool white."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with white values
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=100,
+        cool_white=50,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+
+
+def test_protocol_construct_levels_change_white_clamping():
+    """Test that combined white is clamped to 255."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with white values that exceed 255 when combined
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=200,
+        cool_white=200,  # Total would be 400, should clamp to 255
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    assert isinstance(result[0], bytearray)
+
+
+def test_protocol_extended_state_to_state_white_off():
+    """Test extended_state_to_state when white is off (white_brightness=0)."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Extended state with white_brightness=0 (position 15)
+    extended_state = bytes(
+        (
+            0xEA,
+            0x81,
+            0x01,
+            0x00,
+            0xB6,  # Model
+            0x01,  # Version
+            0x23,  # Power on
+            0x61,  # Mode
+            0x24,
+            0x64,
+            0x0F,
+            0x00,
+            0x00,
+            0x00,
+            0xFF,  # white_temp (255 > 100, triggers branch)
+            0x00,  # white_brightness = 0 (triggers branch)
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x83,
+        )
+    )
+
+    result = proto.extended_state_to_state(extended_state)
+    assert len(result) == 14
+    # cool_white and warm_white should be 0
+    assert result[9] == 0  # warm_white
+    assert result[11] == 0  # cool_white
+
+
+def test_protocol_rgb_to_hsv_bytes_rgbw():
+    """Test _rgb_to_hsv_bytes_rgbw conversion."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test pure red with white
+    result = proto._rgb_to_hsv_bytes_rgbw(255, 0, 0, 100)
+    assert len(result) == 5
+    assert result[0] == 0  # Hue (red = 0)
+    assert result[1] == 100  # Saturation
+    assert result[2] == 100  # Value
+    assert result[3] == 0x00  # Unused
+    assert result[4] == 100  # White
+
+    # Test pure green
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 255, 0, 0)
+    assert result[0] == 60  # Hue (green = 120/2)
+
+    # Test pure blue
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 0, 255, 255)
+    assert result[0] == 120  # Hue (blue = 240/2)
+    assert result[4] == 255  # White
+
+
+# Tests for construct_custom_segment_colors (protocol.py lines 1971-1980)
+
+
+def test_protocol_construct_custom_segment_colors():
+    """Test construct_custom_segment_colors command format."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with a few segments
+    segments = [(255, 0, 0), None, (0, 255, 0)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+    # Check wrapper header
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+
+def test_protocol_construct_custom_segment_colors_all_off():
+    """Test construct_custom_segment_colors with all segments off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # All None segments
+    segments = [None] * 10
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+def test_protocol_construct_custom_segment_colors_zero_tuple():
+    """Test that (0,0,0) is treated as off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Mix of None and (0,0,0)
+    segments = [None, (0, 0, 0), (255, 0, 0)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+# Tests for async API methods
+
+
+@pytest.mark.asyncio
+async def test_async_set_extended_custom_effect_0xB6(mock_aio_protocol):
+    """Test async_set_extended_custom_effect sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0), (0, 255, 0)],
+        speed=50,
+        density=50,
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+@pytest.mark.asyncio
+async def test_async_set_custom_segment_colors_0xB6(mock_aio_protocol):
+    """Test async_set_custom_segment_colors sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_custom_segment_colors(
+        segments=[(255, 0, 0), None, (0, 0, 255)]
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+# Tests for extended_custom_effect_pattern_list property (base_device.py line 658)
+
+
+@pytest.mark.asyncio
+async def test_extended_custom_effect_pattern_list_0xB6(mock_aio_protocol):
+    """Test extended_custom_effect_pattern_list returns list for 0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test extended_custom_effect_pattern_list returns a list
+    pattern_list = light.extended_custom_effect_pattern_list
+    assert pattern_list is not None
+    assert isinstance(pattern_list, list)
+    assert len(pattern_list) > 0
+    # Check some expected patterns
+    assert "wave" in pattern_list
+    assert "meteor" in pattern_list
+    assert "breathe" in pattern_list
+
+
+@pytest.mark.asyncio
+async def test_extended_custom_effect_pattern_list_non_0xB6(mock_aio_protocol):
+    """Test extended_custom_effect_pattern_list returns None for non-0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # Standard 0x25 device (not extended custom)
+    light._aio_protocol.data_received(
+        b"\x81\x25\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xde"
+    )
+    await task
+
+    # Should return None for non-extended devices
+    assert light.extended_custom_effect_pattern_list is None
+
+
+# Tests for _named_effect with extended custom effects (base_device.py line 676)
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_0xB6(mock_aio_protocol):
+    """Test _named_effect returns extended effect name for 0xB6 in custom mode."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with preset_pattern=0x25 (custom effect mode) and mode=0x01 (Wave)
+    # Extended state: preset_pattern at pos 7, mode at pos 8
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,  # Model
+                0x01,  # Version
+                0x23,  # Power on
+                0x25,  # preset_pattern = 0x25 (custom effect mode)
+                0x01,  # mode = Wave pattern ID
+                0x64,  # speed
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Effect should be "Wave" from EXTENDED_CUSTOM_EFFECT_ID_NAME
+    assert light.effect == "Wave"
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_meteor(mock_aio_protocol):
+    """Test _named_effect returns Meteor for mode=0x02."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with mode=0x02 (Meteor)
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x25,  # preset_pattern = 0x25
+                0x02,  # mode = Meteor
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    assert light.effect == "Meteor"
+
+
+# Tests for extract_model_version_from_state (models_db.py)
+
+
+def test_extract_model_version_from_extended_state():
+    """Test extract_model_version_from_state with extended state format."""
+    # Extended state format (0xEA 0x81)
+    extended_state = bytes(
+        (
+            0xEA,
+            0x81,
+            0x01,
+            0x00,
+            0xB6,  # Model at position 4
+            0x05,  # Version at position 5
+            0x23,
+            0x61,
+            0x24,
+            0x64,
+            0x0F,
+            0x00,
+            0x00,
+            0x00,
+            0x64,
+            0x64,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x83,
+        )
+    )
+
+    model_num, version_num = extract_model_version_from_state(extended_state)
+    assert model_num == 0xB6
+    assert version_num == 5
+
+
+def test_extract_model_version_from_standard_state():
+    """Test extract_model_version_from_state with standard state format."""
+    # Standard state format (0x81)
+    standard_state = bytes(
+        (
+            0x81,
+            0x25,  # Model at position 1
+            0x23,
+            0x61,
+            0x05,
+            0x10,
+            0xB6,
+            0x00,
+            0x98,
+            0x19,
+            0x04,  # Version at position 10
+            0x25,
+            0x0F,
+            0xDE,
+        )
+    )
+
+    model_num, version_num = extract_model_version_from_state(standard_state)
+    assert model_num == 0x25
+    assert version_num == 4
+
+
+def test_extract_model_version_short_standard_state():
+    """Test extract_model_version_from_state with short standard state (no version)."""
+    # Short standard state without version byte
+    short_state = bytes((0x81, 0x33, 0x23, 0x61, 0x05, 0x10, 0xB6, 0x00, 0x98, 0x19))
+
+    model_num, version_num = extract_model_version_from_state(short_state)
+    assert model_num == 0x33
+    assert version_num == 1  # Default when not present
+
+
+# Tests for protocol edge cases
+
+
+def test_protocol_extended_custom_state_response_length():
+    """Test state_response_length property returns correct value."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.state_response_length == LEDENET_EXTENDED_STATE_RESPONSE_LEN
+    assert proto.state_response_length == 21
+
+
+def test_protocol_extended_state_to_state_short_input():
+    """Test extended_state_to_state returns empty bytes for short input."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Input too short (< 20 bytes)
+    short_state = bytes((0xEA, 0x81, 0x01, 0x00, 0xB6))
+    result = proto.extended_state_to_state(short_state)
+    assert result == b""
+
+
+def test_protocol_named_raw_state_standard_format():
+    """Test named_raw_state with standard 14-byte format."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Standard 14-byte state (should pass through directly)
+    standard_state = bytes(
+        (
+            0x81,
+            0xB6,
+            0x23,
+            0x61,
+            0x00,
+            0x64,
+            0xFF,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+        )
+    )
+    result = proto.named_raw_state(standard_state)
+    assert result.head == 0x81
+    assert result.model_num == 0xB6
