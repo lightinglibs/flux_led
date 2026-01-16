@@ -54,10 +54,14 @@ from .const import (
     ATTR_IPADDR,
     ExtendedCustomEffectDirection,
     ExtendedCustomEffectPattern,
+    TIMER_ACTION_ON,
+    TIMER_ACTION_OFF,
+    TIMER_ACTION_COLOR,
 )
 from .pattern import PresetPattern
+from .protocol import ProtocolLEDENETExtendedCustom
 from .scanner import FluxLEDDiscovery
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import utils
 
 _LOGGER = logging.getLogger(__name__)
@@ -370,6 +374,146 @@ def processSetTimerArgs(parser: OptionParser, args: Any) -> LedTimer:
         parser.error(f"Not a valid timer mode: {mode}")
 
     return timer
+
+
+def processSetTimerArgsExtended(
+    parser: OptionParser, args: list[str]
+) -> LedTimerExtended:
+    """Process timer args for 0xB6 extended timer format.
+
+    Supported modes: inactive, default (on), poweroff, color
+    Settings format: mode;time:HHMM;repeat:0123456;color:RRGGBB
+    """
+    num = args[0]
+    mode = args[1].lower() if len(args) > 1 else "inactive"
+    settings = args[2] if len(args) > 2 else ""
+
+    if not num.isdigit() or int(num) > 6 or int(num) < 1:
+        parser.error("Timer number must be between 1 and 6")
+
+    slot = int(num)
+
+    # parse settings
+    settings_dict: dict[str, str] = {}
+    if settings:
+        for s in settings.split(";"):
+            pair = s.split(":")
+            key = pair[0].strip().lower()
+            val = pair[1].strip().lower() if len(pair) > 1 else ""
+            settings_dict[key] = val
+
+    if mode == "inactive":
+        return LedTimerExtended(
+            slot=slot,
+            active=False,
+            hour=0,
+            minute=0,
+            repeat_mask=0,
+            action_type=TIMER_ACTION_OFF,
+        )
+
+    if mode not in ["poweroff", "default", "color"]:
+        parser.error(
+            f"Not a valid timer mode for this device: {mode}. "
+            "Supported: inactive, default, poweroff, color"
+        )
+
+    # validate time
+    if "time" not in settings_dict:
+        parser.error(f"This mode needs a time: {mode}")
+    time_str = settings_dict["time"]
+    if len(time_str) != 4 or not time_str.isdigit():
+        parser.error("time must be 4 digits (HHMM)")
+    hour = int(time_str[0:2])
+    minute = int(time_str[2:4])
+    if hour > 23:
+        parser.error("timer hour can't be greater than 23")
+    if minute > 59:
+        parser.error("timer minute can't be greater than 59")
+
+    # parse repeat mask
+    # Format: repeat:0123456 where 0=Sun, 1=Mon, ..., 6=Sat
+    repeat_mask = 0
+    if "repeat" in settings_dict:
+        repeat_str = settings_dict["repeat"]
+        for c in repeat_str:
+            if c not in "0123456":
+                parser.error("repeat can only contain digits 0-6")
+            day = int(c)
+            # Map: 0=Sun->bit7, 1=Mon->bit1, 2=Tue->bit2, ..., 6=Sat->bit6
+            if day == 0:
+                repeat_mask |= 0x80  # Sunday = bit 7
+            else:
+                repeat_mask |= 1 << day  # Mon=bit1, Tue=bit2, etc.
+
+    # determine action type and build timer
+    if mode == "poweroff":
+        return LedTimerExtended(
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
+            repeat_mask=repeat_mask,
+            action_type=TIMER_ACTION_OFF,
+        )
+
+    if mode == "default":
+        return LedTimerExtended(
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
+            repeat_mask=repeat_mask,
+            action_type=TIMER_ACTION_ON,
+        )
+
+    if mode == "color":
+        if "color" not in settings_dict:
+            parser.error("color mode needs a color setting")
+        color_val = settings_dict["color"]
+        rgb = utils.color_object_to_tuple(color_val)
+        if rgb is None:
+            parser.error(f"Invalid color value: {color_val}")
+        assert rgb is not None
+        # Convert RGB to HSV (0-255 scale)
+        r, g, b = rgb[0], rgb[1], rgb[2]
+        max_c = max(r, g, b)
+        min_c = min(r, g, b)
+        if max_c == 0:
+            hsv_s = 0
+            hsv_h = 0
+        else:
+            hsv_s = int((max_c - min_c) * 255 / max_c)
+            delta = max_c - min_c
+            if delta == 0:
+                hsv_h = 0
+            elif max_c == r:
+                hsv_h = int(((g - b) / delta) * 255 / 6) % 256
+            elif max_c == g:
+                hsv_h = int((2.0 + (b - r) / delta) * 255 / 6) % 256
+            else:
+                hsv_h = int((4.0 + (r - g) / delta) * 255 / 6) % 256
+
+        # brightness from settings or default to 100%
+        brightness = 100
+        if "brightness" in settings_dict:
+            brightness = int(settings_dict["brightness"])
+            if brightness > 100:
+                brightness = 100
+
+        return LedTimerExtended(
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
+            repeat_mask=repeat_mask,
+            action_type=TIMER_ACTION_COLOR,
+            color_hsv=(hsv_h, hsv_s, brightness),
+        )
+
+    # Should never reach here due to earlier validation
+    parser.error(f"Not a valid timer mode: {mode}")
+    raise SystemExit(1)  # For type checker
 
 
 def processCustomArgs(
@@ -808,11 +952,9 @@ def parseArgs() -> tuple[Values, Any]:
         print()
         sys.exit(0)
 
-    if options.settimer:
-        new_timer = processSetTimerArgs(parser, options.settimer)
-        options.new_timer = new_timer
-    else:
-        options.new_timer = None
+    # Timer processing is deferred to _async_run_commands since we need
+    # to know the device protocol first (0xB6 uses extended timer format)
+    options.new_timer = None
 
     mode_count = 0
     if options.color:
@@ -1042,14 +1184,34 @@ async def _async_run_commands(
         buf_in("{} [{}] {} ({})".format(info["id"], info["ipaddr"], bulb, bulb.model))
 
     if options.settimer:
-        empty_timers: list[LedTimer] = []
-        timers = await bulb.async_get_timers() or empty_timers
+        # Check if device uses extended timer format (0xB6)
+        is_extended = isinstance(bulb._protocol, ProtocolLEDENETExtendedCustom)
         num = int(options.settimer[0])
-        buf_in(f"New Timer ---- #{num}: {options.new_timer}")
-        if options.new_timer.isExpired():
-            buf_in("[timer is already expired, will be deactivated]")
-        timers[num - 1] = options.new_timer
-        await bulb.async_set_timers(timers)
+
+        if is_extended:
+            # Create a minimal parser for error handling
+            from optparse import OptionParser as OP
+
+            temp_parser = OP()
+            ext_timer = processSetTimerArgsExtended(temp_parser, options.settimer)
+            buf_in(f"New Timer ---- #{num}: {ext_timer}")
+            await bulb.async_set_timer(ext_timer)
+        else:
+            from optparse import OptionParser as OP
+            from typing import cast
+
+            temp_parser = OP()
+            std_timer = processSetTimerArgs(temp_parser, options.settimer)
+            buf_in(f"New Timer ---- #{num}: {std_timer}")
+            if std_timer.isExpired():
+                buf_in("[timer is already expired, will be deactivated]")
+            timers_result = await bulb.async_get_timers()
+            timers_list = cast(list[LedTimer], timers_result) if timers_result else []
+            if len(timers_list) < num:
+                # Extend list if needed
+                timers_list.extend([LedTimer() for _ in range(num - len(timers_list))])
+            timers_list[num - 1] = std_timer
+            await bulb.async_set_timers(timers_list)
 
     if options.showtimers:
         show_timers = await bulb.async_get_timers()

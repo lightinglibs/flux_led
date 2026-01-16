@@ -45,11 +45,12 @@ from .protocol import (
     ProtocolLEDENET8Byte,
     ProtocolLEDENETAddressableA3,
     ProtocolLEDENETAddressableChristmas,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETOriginal,
     RemoteConfig,
 )
 from .scanner import FluxLEDDiscovery
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import color_temp_to_white_levels, rgbw_brightness, rgbww_brightness
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         self._get_time_future: asyncio.Future[bool] | None = None
         self._get_timers_lock: asyncio.Lock = asyncio.Lock()
         self._get_timers_future: asyncio.Future[bool] | None = None
-        self._timers: list[LedTimer] | None = None
+        self._timers: list[LedTimer] | list[LedTimerExtended] | None = None
         self._power_restore_future: asyncio.Future[bool] = loop.create_future()
         self._device_config_lock: asyncio.Lock = asyncio.Lock()
         self._device_config_future: asyncio.Future[bool] = loop.create_future()
@@ -675,7 +676,7 @@ class AIOWifiLedBulb(LEDENETDevice):
                 return None
             return self._last_time
 
-    async def async_get_timers(self) -> list[LedTimer] | None:
+    async def async_get_timers(self) -> list[LedTimer] | list[LedTimerExtended] | None:
         """Get the timers."""
         assert self._protocol is not None
         if isinstance(self._protocol, ProtocolLEDENETOriginal):
@@ -692,10 +693,24 @@ class AIOWifiLedBulb(LEDENETDevice):
                 return None
             return self._timers
 
-    async def async_set_timers(self, timer_list: list[LedTimer]) -> None:
+    async def async_set_timers(
+        self, timer_list: list[LedTimer] | list[LedTimerExtended]
+    ) -> None:
         """Set the timers."""
         assert self._protocol is not None
-        await self._async_send_msg(self._protocol.construct_set_timers(timer_list))
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            # 0xB6 devices set timers one at a time
+            commands = self._protocol.construct_set_timers(timer_list)  # type: ignore[arg-type]
+            for cmd in commands:
+                await self._async_send_msg(cmd)
+        else:
+            await self._async_send_msg(self._protocol.construct_set_timers(timer_list))  # type: ignore[arg-type]
+
+    async def async_set_timer(self, timer: LedTimerExtended) -> None:
+        """Set a single timer (for 0xB6 devices)."""
+        assert self._protocol is not None
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            await self._async_send_msg(self._protocol.construct_set_timer(timer))
 
     async def async_set_time(self, time: datetime | None = None) -> None:
         """Set the current time."""

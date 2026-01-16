@@ -5501,3 +5501,774 @@ def test_protocol_named_raw_state_standard_format():
     result = proto.named_raw_state(standard_state)
     assert result.head == 0x81
     assert result.model_num == 0xB6
+
+
+# Tests for 0xB6 Extended Timer Support
+
+
+def test_protocol_construct_get_timers_0xB6():
+    """Test timer query construction for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+    msg = proto.construct_get_timers()
+
+    # Should be wrapped message with inner content [0xE0, 0x06]
+    assert msg[0:6] == bytes([0xB0, 0xB1, 0xB2, 0xB3, 0x00, 0x01])
+    # Version byte at position 6
+    assert msg[6] == 0x01
+    # Inner message length at positions 8-9 (should be 2)
+    assert msg[8] == 0x00
+    assert msg[9] == 0x02
+    # Inner message starts at position 10
+    assert msg[10] == 0xE0
+    assert msg[11] == 0x06
+
+
+def test_protocol_is_valid_timers_response_0xB6():
+    """Test timer response validation for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Valid response starts with e0 06
+    assert proto.is_valid_timers_response(bytes([0xE0, 0x06])) is True
+    assert proto.is_valid_timers_response(bytes([0xE0, 0x06, 0x01, 0x02])) is True
+
+    # Invalid responses
+    assert proto.is_valid_timers_response(bytes([0xE0])) is False
+    assert proto.is_valid_timers_response(bytes([0x01, 0x22])) is False
+    assert proto.is_valid_timers_response(bytes([])) is False
+
+
+def test_protocol_parse_get_timers_empty_0xB6():
+    """Test parsing empty timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Empty response (no timers configured)
+    response = bytes([0xE0, 0x06])
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 0
+
+
+def test_protocol_parse_get_timers_single_0xB6():
+    """Test parsing single timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Response with one timer: 13:25 OFF, no repeat
+    # Format: e0 06 [slot1: 21 bytes] [empty slots 2-6: 7 bytes each]
+    response = bytes.fromhex(
+        "e006"  # Header
+        "01f00d1900000ee001002400000000000000000000"  # Slot 1: 13:25 OFF
+        "0264640000690003000000000000040000000000000500000000000006000000000000"  # Slots 2-6 empty
+    )
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 6
+
+    # First timer should be active
+    timer1 = timers[0]
+    assert timer1.slot == 1
+    assert timer1.active is True
+    assert timer1.hour == 13
+    assert timer1.minute == 25
+    assert timer1.repeat_mask == 0
+    assert timer1.action_type == 0x24  # OFF
+
+    # Remaining timers should be inactive
+    for i in range(1, 6):
+        assert timers[i].active is False
+
+
+def test_protocol_parse_get_timers_multiple_0xB6():
+    """Test parsing multiple timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Response with three timers (from actual packet capture)
+    # Format: e0 06 [slot1: 21 bytes] [slot2: 21 bytes] [slot3: 21 bytes] [slots 4-6: 7 bytes each]
+    response = bytes.fromhex(
+        "e006"  # Header
+        "01f00d1900000ee001002400000000000000000000"  # Slot 1: 13:25 OFF
+        "02f00f2300000ee001002400000000000000000000"  # Slot 2: 15:35 OFF
+        "03f00d2100000ee001002400000000000000000000"  # Slot 3: 13:33 OFF
+        "04000000000000"  # Slot 4 empty
+        "05000000000000"  # Slot 5 empty
+        "06000000000000"  # Slot 6 empty
+    )
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 6
+
+    # Check active timers
+    assert timers[0].slot == 1
+    assert timers[0].hour == 13
+    assert timers[0].minute == 25
+    assert timers[0].active is True
+
+    assert timers[1].slot == 2
+    assert timers[1].hour == 15
+    assert timers[1].minute == 35
+    assert timers[1].active is True
+
+    assert timers[2].slot == 3
+    assert timers[2].hour == 13
+    assert timers[2].minute == 33
+    assert timers[2].active is True
+
+    # Check inactive timers
+    assert timers[3].active is False
+    assert timers[4].active is False
+    assert timers[5].active is False
+
+
+def test_protocol_parse_get_timers_with_color_0xB6():
+    """Test parsing timer with color action for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Build a timer response with color action (0xa1)
+    # Slot 1: 17:15, Sun+Tue repeat (0x84), color action with HSV
+    inner_slot1 = bytes.fromhex("01f0110f00840ee00100a17be432000000000000")
+    inner_empty = bytes.fromhex("02000000000000030000000000000400000000000005000000000000060000000000")
+
+    response = bytes([0xE0, 0x06]) + inner_slot1 + inner_empty
+    timers = proto.parse_get_timers(response)
+
+    # Check first timer
+    timer1 = timers[0]
+    assert timer1.slot == 1
+    assert timer1.hour == 17
+    assert timer1.minute == 15
+    assert timer1.repeat_mask == 0x84  # Sun + Tue
+    assert timer1.action_type == 0xA1  # Color
+    assert timer1.color_hsv == (0x7B, 0xE4, 0x32)  # (123, 228, 50)
+
+
+def test_led_timer_extended_simple_on():
+    """Test LedTimerExtended for simple ON action."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_ON
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=8,
+        minute=30,
+        repeat_mask=LedTimerExtended.Weekdays,
+        action_type=TIMER_ACTION_ON,
+    )
+
+    assert timer.is_on is True
+    assert timer.is_scene is False
+    assert timer.is_color is False
+    assert timer.repeat_days == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[0] == 0xF0  # Active flag
+    assert data[1] == 8  # Hour
+    assert data[2] == 30  # Minute
+    assert data[9] == 0x23  # ON action
+
+
+def test_led_timer_extended_simple_off():
+    """Test LedTimerExtended for simple OFF action."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_OFF
+
+    timer = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=22,
+        minute=0,
+        repeat_mask=0,  # No repeat
+        action_type=TIMER_ACTION_OFF,
+    )
+
+    assert timer.is_on is False
+    assert timer.repeat_days == []
+
+    data = timer.to_bytes()
+    assert data[9] == 0x24  # OFF action
+
+
+def test_led_timer_extended_color():
+    """Test LedTimerExtended for color action."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_COLOR
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=17,
+        minute=15,
+        repeat_mask=0x84,  # Sun + Tue
+        action_type=TIMER_ACTION_COLOR,
+        color_hsv=(123, 228, 50),
+    )
+
+    assert timer.is_on is True
+    assert timer.is_color is True
+    assert timer.repeat_days == ["Tue", "Sun"]
+
+    data = timer.to_bytes()
+    assert data[9] == 0xA1  # Color action
+    assert data[10] == 123  # Hue
+    assert data[11] == 228  # Saturation
+    assert data[12] == 50  # Brightness
+
+
+def test_led_timer_extended_inactive():
+    """Test LedTimerExtended for inactive timer."""
+    from flux_led.timer import LedTimerExtended
+
+    timer = LedTimerExtended(
+        slot=3,
+        active=False,
+    )
+
+    data = timer.to_bytes()
+    # Inactive timer should be all zeros
+    assert data == bytes(20)
+
+
+def test_led_timer_extended_from_bytes_simple():
+    """Test LedTimerExtended.from_bytes for simple timer."""
+    from flux_led.timer import LedTimerExtended
+
+    # Simple OFF timer: slot 1, 13:25, no repeat (21 bytes)
+    data = bytes.fromhex("01f00d1900000ee001002400000000000000000000")
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert consumed == 21
+    assert timer.slot == 1
+    assert timer.active is True
+    assert timer.hour == 13
+    assert timer.minute == 25
+    assert timer.repeat_mask == 0
+    assert timer.action_type == 0x24  # OFF
+
+
+def test_led_timer_extended_from_bytes_empty():
+    """Test LedTimerExtended.from_bytes for empty slot."""
+    from flux_led.timer import LedTimerExtended
+
+    # Empty slot
+    data = bytes.fromhex("0300000000000000")
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert consumed == 7
+    assert timer.slot == 3
+    assert timer.active is False
+
+
+def test_led_timer_extended_str():
+    """Test LedTimerExtended string representation."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_OFF, TIMER_ACTION_ON, TIMER_ACTION_COLOR
+
+    timer_off = LedTimerExtended(
+        slot=1, active=True, hour=22, minute=0, action_type=TIMER_ACTION_OFF
+    )
+    assert "OFF" in str(timer_off)
+    assert "22:00" in str(timer_off)
+
+    timer_on = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=8,
+        minute=30,
+        repeat_mask=LedTimerExtended.Weekdays,
+        action_type=TIMER_ACTION_ON,
+    )
+    assert "ON" in str(timer_on)
+    assert "Mon" in str(timer_on)
+
+    timer_inactive = LedTimerExtended(slot=3, active=False)
+    assert "Unset" in str(timer_inactive)
+
+
+def test_protocol_construct_set_timer_0xB6():
+    """Test timer set construction for 0xB6 device."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_OFF
+
+    proto = ProtocolLEDENETExtendedCustom()
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=13,
+        minute=25,
+        repeat_mask=0,
+        action_type=TIMER_ACTION_OFF,
+    )
+
+    msg = proto.construct_set_timer(timer)
+
+    # Should be wrapped message
+    assert msg[0:6] == bytes([0xB0, 0xB1, 0xB2, 0xB3, 0x00, 0x01])
+    # Version byte
+    assert msg[6] == 0x01
+    # Inner message starts at position 10
+    assert msg[10] == 0xE0  # Extended command
+    assert msg[11] == 0x05  # Set timer command
+    assert msg[12] == 0x01  # Slot number
+
+
+def test_led_timer_extended_scene_gradient():
+    """Test LedTimerExtended for scene gradient action."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import (
+        TIMER_ACTION_SCENE_GRADIENT,
+        ExtendedCustomEffectPattern,
+    )
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=18,
+        minute=30,
+        repeat_mask=LedTimerExtended.Everyday,
+        action_type=TIMER_ACTION_SCENE_GRADIENT,
+        pattern=ExtendedCustomEffectPattern.WAVE,
+        speed=80,
+        colors=[(100, 100, 100), (50, 50, 50)],
+    )
+
+    assert timer.is_on is True
+    assert timer.is_scene is True
+    assert timer.is_color is False
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[0] == 0xF0  # Active flag
+    assert data[1] == 18  # Hour
+    assert data[2] == 30  # Minute
+    assert data[5] == TIMER_ACTION_SCENE_GRADIENT
+    assert data[6] == 0xE1  # Effect marker
+    assert data[7] == 0x21  # Gradient effect type
+
+    # Test __str__
+    s = str(timer)
+    assert "Scene: Wave" in s
+    assert "2 colors" in s
+
+
+def test_led_timer_extended_scene_segments():
+    """Test LedTimerExtended for scene segments (colorful) action."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_SCENE_SEGMENTS
+
+    timer = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=20,
+        minute=0,
+        repeat_mask=LedTimerExtended.Weekend,
+        action_type=TIMER_ACTION_SCENE_SEGMENTS,
+        colors=[(180, 100, 100), (0, 100, 100), (60, 100, 100)],
+    )
+
+    assert timer.is_scene is True
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[5] == TIMER_ACTION_SCENE_SEGMENTS
+    assert data[6] == 0xE1  # Effect marker
+    assert data[7] == 0x22  # Segments effect type
+
+    # Test __str__
+    s = str(timer)
+    assert "Colorful" in s
+    assert "3 colors" in s
+
+
+def test_led_timer_extended_from_bytes_scene_gradient():
+    """Test LedTimerExtended.from_bytes for scene gradient timer."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_SCENE_GRADIENT
+
+    # Scene gradient timer from real device data:
+    # slot=4, 18:38, repeat=0x0f, action=0x29, e1 21 header, 5 colors
+    data = bytes.fromhex(
+        "04f0122600f629e12100500300016450000000000000050c646400001e646400005a646400006ce464000096646400"
+    )
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert timer.slot == 4
+    assert timer.active is True
+    assert timer.hour == 18
+    assert timer.minute == 38
+    assert timer.repeat_mask == 0xF6  # All days except bit 0 and 3
+    assert timer.action_type == TIMER_ACTION_SCENE_GRADIENT
+    assert len(timer.colors) == 5
+    # First color: 0c 64 64 = (12, 100, 100)
+    assert timer.colors[0] == (0x0C, 0x64, 0x64)
+
+
+def test_led_timer_extended_from_bytes_scene_segments():
+    """Test LedTimerExtended.from_bytes for scene segments timer."""
+    from flux_led.timer import LedTimerExtended
+    from flux_led.const import TIMER_ACTION_SCENE_SEGMENTS
+
+    # Scene segments timer: slot=1, 12:00, e1 22 header, 3 colors
+    # Construct a minimal segments timer
+    data = bytearray()
+    data.append(0x01)  # slot
+    data.append(0xF0)  # flags
+    data.append(12)    # hour
+    data.append(0)     # minute
+    data.append(0)     # seconds
+    data.append(0)     # repeat
+    data.append(0x6B)  # action (segments)
+    data.append(0xE1)  # effect marker
+    data.append(0x22)  # segments type
+    data.extend([0, 0, 0, 0])  # header padding
+    data.append(3)     # num colors
+    # 3 colors (5 bytes each)
+    data.extend([100, 100, 50, 0, 0])
+    data.extend([50, 80, 60, 0, 0])
+    data.extend([150, 90, 70, 0, 0])
+
+    timer, consumed = LedTimerExtended.from_bytes(bytes(data), 0)
+
+    assert timer.slot == 1
+    assert timer.active is True
+    assert timer.action_type == TIMER_ACTION_SCENE_SEGMENTS
+    assert len(timer.colors) == 3
+    assert timer.colors[0] == (100, 100, 50)
+    assert timer.colors[1] == (50, 80, 60)
+    assert timer.colors[2] == (150, 90, 70)
+
+
+def test_led_timer_extended_str_unknown_action():
+    """Test LedTimerExtended.__str__ for unknown action type."""
+    from flux_led.timer import LedTimerExtended
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=10,
+        minute=30,
+        action_type=0xFF,  # Unknown action
+    )
+
+    s = str(timer)
+    assert "Unknown action: 0xff" in s
+
+
+def test_led_timer_extended_from_bytes_truncated():
+    """Test LedTimerExtended.from_bytes handles truncated data."""
+    from flux_led.timer import LedTimerExtended
+
+    # Only 5 bytes - not enough for a valid timer
+    data = bytes([0x01, 0xF0, 12, 30, 0])
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+    assert consumed == 5  # Returns what's available
+
+
+# =============================================================================
+# CLI Timer Parsing Tests
+# =============================================================================
+
+
+def test_cli_process_set_timer_args_extended_inactive():
+    """Test CLI parsing for inactive extended timer."""
+    from optparse import OptionParser
+
+    from flux_led.const import TIMER_ACTION_OFF
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(parser, ["1", "inactive", ""])
+    assert timer.slot == 1
+    assert timer.active is False
+    assert timer.action_type == TIMER_ACTION_OFF
+
+
+def test_cli_process_set_timer_args_extended_poweroff():
+    """Test CLI parsing for poweroff extended timer."""
+    from optparse import OptionParser
+
+    from flux_led.const import TIMER_ACTION_OFF
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["2", "poweroff", "time:1430;repeat:12345"]
+    )
+    assert timer.slot == 2
+    assert timer.active is True
+    assert timer.hour == 14
+    assert timer.minute == 30
+    assert timer.action_type == TIMER_ACTION_OFF
+    # repeat 12345 = Mon|Tue|Wed|Thu|Fri = bits 1,2,3,4,5 = 0x3E
+    assert timer.repeat_mask == 0x3E
+
+
+def test_cli_process_set_timer_args_extended_default_on():
+    """Test CLI parsing for default (on) extended timer."""
+    from optparse import OptionParser
+
+    from flux_led.const import TIMER_ACTION_ON
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["3", "default", "time:0830;repeat:06"]
+    )
+    assert timer.slot == 3
+    assert timer.active is True
+    assert timer.hour == 8
+    assert timer.minute == 30
+    assert timer.action_type == TIMER_ACTION_ON
+    # repeat 06 = Sun|Sat = bits 7,6 = 0x80|0x40 = 0xC0
+    assert timer.repeat_mask == 0xC0
+
+
+def test_cli_process_set_timer_args_extended_color():
+    """Test CLI parsing for color extended timer."""
+    from optparse import OptionParser
+
+    from flux_led.const import TIMER_ACTION_COLOR
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    # Use color name instead of hex code (hex needs # prefix)
+    timer = processSetTimerArgsExtended(
+        parser, ["4", "color", "time:2100;repeat:0123456;color:red"]
+    )
+    assert timer.slot == 4
+    assert timer.active is True
+    assert timer.hour == 21
+    assert timer.minute == 0
+    assert timer.action_type == TIMER_ACTION_COLOR
+    assert timer.color_hsv is not None
+    # red should have hue=0
+    assert timer.color_hsv[0] == 0  # hue
+
+
+def test_cli_process_set_timer_args_extended_color_with_brightness():
+    """Test CLI parsing for color extended timer with brightness."""
+    from optparse import OptionParser
+
+    from flux_led.const import TIMER_ACTION_COLOR
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    # Use hex with # prefix
+    timer = processSetTimerArgsExtended(
+        parser, ["5", "color", "time:1200;repeat:1;color:#00ff00;brightness:50"]
+    )
+    assert timer.slot == 5
+    assert timer.active is True
+    assert timer.action_type == TIMER_ACTION_COLOR
+    assert timer.color_hsv is not None
+    # Check brightness is 50
+    assert timer.color_hsv[2] == 50
+
+
+def test_cli_process_set_timer_args_extended_weekend_repeat():
+    """Test CLI parsing for weekend repeat (0=Sun, 6=Sat)."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["1", "poweroff", "time:2200;repeat:06"]
+    )
+    # repeat 06 = Sun|Sat = bit7 | bit6 = 0x80 | 0x40 = 0xC0
+    assert timer.repeat_mask == 0xC0
+
+
+def test_cli_process_set_timer_args_extended_everyday_repeat():
+    """Test CLI parsing for everyday repeat (0123456)."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgsExtended
+
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["1", "default", "time:0700;repeat:0123456"]
+    )
+    # repeat 0123456 = Sun|Mon|Tue|Wed|Thu|Fri|Sat
+    # bit7=Sun + bits1-6 = 0x80 | 0x7E = 0xFE
+    assert timer.repeat_mask == 0xFE
+
+
+def test_cli_process_set_timer_args_standard_inactive():
+    """Test CLI parsing for inactive standard timer."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgs
+
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["1", "inactive", ""])
+    assert timer.isActive() is False
+
+
+def test_cli_process_set_timer_args_standard_poweroff():
+    """Test CLI parsing for poweroff standard timer."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgs
+
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["2", "poweroff", "time:1430;repeat:12345"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 14
+    assert timer.minute == 30
+    # Check it's a turn-off timer
+    assert timer.turn_on is False
+
+
+def test_cli_process_set_timer_args_standard_default():
+    """Test CLI parsing for default (on) standard timer."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgs
+
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["3", "default", "time:0830;repeat:06"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 8
+    assert timer.minute == 30
+
+
+def test_cli_process_set_timer_args_standard_color():
+    """Test CLI parsing for color standard timer."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgs
+
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["4", "color", "time:2100;repeat:0123456;color:255,0,0"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 21
+    assert timer.minute == 0
+    assert timer.red == 255
+    assert timer.green == 0
+    assert timer.blue == 0
+
+
+def test_cli_process_set_timer_args_standard_warmwhite():
+    """Test CLI parsing for warmwhite standard timer."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgs
+
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["5", "warmwhite", "time:2200;repeat:12345;level:75"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 22
+    assert timer.minute == 0
+    # 75% is converted to byte: int((75 * 255) / 100) = 191
+    assert timer.warmth_level == 191
+
+
+def test_cli_process_set_timer_args_standard_preset():
+    """Test CLI parsing for preset standard timer."""
+    from optparse import OptionParser
+
+    from flux_led.fluxled import processSetTimerArgs
+
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["6", "preset", "time:1800;repeat:06;code:37;speed:50"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 18
+    assert timer.minute == 0
+    assert timer.pattern_code == 37
+
+
+# =============================================================================
+# Timer Display Formatting Tests (__str__)
+# =============================================================================
+
+
+def test_led_timer_standard_str_inactive():
+    """Test LedTimer.__str__ for inactive timer."""
+    from flux_led.timer import LedTimer
+
+    timer = LedTimer()
+    timer.setActive(False)
+    assert str(timer) == "Unset"
+
+
+def test_led_timer_standard_str_on():
+    """Test LedTimer.__str__ for turn-on timer."""
+    from flux_led.timer import LedTimer
+
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(8, 30)
+    timer.setModeDefault()
+    timer.setRepeatMask(LedTimer.Weekdays)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "08:30" in s
+    assert "Mo" in s
+    assert "Tu" in s
+    assert "Fr" in s
+
+
+def test_led_timer_standard_str_off():
+    """Test LedTimer.__str__ for turn-off timer."""
+    from flux_led.timer import LedTimer
+
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(22, 0)
+    timer.setModeTurnOff()
+    timer.setRepeatMask(LedTimer.Everyday)
+
+    s = str(timer)
+    assert "[OFF]" in s
+    assert "22:00" in s
+
+
+def test_led_timer_standard_str_once():
+    """Test LedTimer.__str__ for one-time timer."""
+    from flux_led.timer import LedTimer
+
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(14, 30)
+    timer.setModeDefault()
+    timer.setDate(2025, 12, 25)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "14:30" in s
+    assert "Once" in s
+    assert "2025-12-25" in s
+
+
+def test_led_timer_standard_str_color():
+    """Test LedTimer.__str__ for color timer."""
+    from flux_led.timer import LedTimer
+
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(19, 0)
+    timer.setModeColor(255, 0, 0)
+    timer.setRepeatMask(LedTimer.Weekend)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "19:00" in s
+    assert "Sa" in s
+    assert "Su" in s
+
+

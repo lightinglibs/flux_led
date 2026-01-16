@@ -27,7 +27,7 @@ from .const import (
     LevelWriteModeData,
     MultiColorEffects,
 )
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import (
     scaled_color_temp_to_white_levels,
     utils,
@@ -137,6 +137,7 @@ MSG_POWER_STATE = "power_state"
 MSG_STATE = "state"
 MSG_TIME = "time"
 MSG_TIMERS = "timers"
+MSG_TIMERS_EXTENDED = "timers_extended"
 MSG_MUSIC_MODE_STATE = "music_mode_state"
 MSG_ADDRESSABLE_STATE = "addressable_state"
 MSG_DEVICE_CONFIG = "device_config"
@@ -172,6 +173,7 @@ MSG_UNIQUE_START = {
     (0x63,): MSG_A1_DEVICE_CONFIG,
     (0x72,): MSG_MUSIC_MODE_STATE,
     (0x2B,): MSG_REMOTE_CONFIG,
+    (0xE0, 0x06): MSG_TIMERS_EXTENDED,  # 0xB6 device timer response
 }
 
 MSG_LENGTHS = {
@@ -1980,6 +1982,110 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         return self.construct_wrapped_message(
             msg, inner_pre_constructed=True, version=0x02
         )
+
+    # --- Timer Support for 0xB6 devices ---
+    # This protocol uses a different timer format than other protocols:
+    # - Query: e0 06 (wrapped)
+    # - Response: e0 06 + variable length slot data
+    # - Set: e0 05 SS f0 HH MM 00 RR ... (wrapped)
+
+    def construct_get_timers(self) -> bytearray:
+        """Construct a get timers request.
+
+        0xB6 devices use the wrapped e0 06 command for timer queries.
+        """
+        inner = bytearray([0xE0, 0x06])
+        return self.construct_wrapped_message(
+            inner, inner_pre_constructed=True, version=0x01
+        )
+
+    def construct_set_timer(self, timer: LedTimerExtended) -> bytearray:
+        """Construct a set timer command for a single timer.
+
+        0xB6 devices set timers one at a time using e0 05 SS ...
+
+        Args:
+            timer: The LedTimerExtended object to set
+
+        Returns:
+            Wrapped command bytearray
+        """
+        inner = bytearray([0xE0, 0x05, timer.slot])
+        inner.extend(timer.to_bytes())
+        return self.construct_wrapped_message(
+            inner, inner_pre_constructed=True, version=0x01
+        )
+
+    def construct_set_timers(self, timer_list: list[LedTimerExtended]) -> list[bytearray]:  # type: ignore[override]
+        """Construct set timer commands for multiple timers.
+
+        0xB6 devices set timers one at a time, so this returns a list
+        of commands (one per timer).
+
+        Args:
+            timer_list: List of LedTimerExtended objects to set
+
+        Returns:
+            List of wrapped command bytearrays
+        """
+        return [self.construct_set_timer(timer) for timer in timer_list]
+
+    def is_valid_timers_response(self, msg: bytes) -> bool:
+        """Check if a message is a valid timers response.
+
+        0xB6 timer responses start with e0 06.
+        """
+        if len(msg) < 2:
+            return False
+        return msg[0] == 0xE0 and msg[1] == 0x06
+
+    def parse_get_timers(self, msg: bytes) -> list[LedTimerExtended]:  # type: ignore[override]
+        """Parse timer response into list of LedTimerExtended objects.
+
+        Response format:
+        - Empty: e0 06 (2 bytes)
+        - With timers: e0 06 [slot1] [slot2] ... [slot6]
+
+        Each slot is either:
+        - 7 bytes if empty/inactive
+        - 21 bytes if simple timer (ON/OFF/color)
+        - Variable (48+) bytes if scene timer
+        """
+        if len(msg) <= 2:
+            # Empty response or just header - no timers configured
+            return []
+
+        timers: list[LedTimerExtended] = []
+        offset = 2  # Skip e0 06 header
+
+        while offset < len(msg):
+            # Check if we have enough bytes for minimum slot (7 bytes)
+            if offset + 7 > len(msg):
+                break
+
+            timer, consumed = LedTimerExtended.from_bytes(msg, offset)
+            timers.append(timer)
+            offset += consumed
+
+        return timers
+
+    @property
+    def timer_count(self) -> int:
+        """Number of timer slots supported."""
+        return 6
+
+    def expected_timers_response_length(self, data: bytes) -> int:
+        """Calculate expected timer response length.
+
+        For 0xB6 devices, the timer response has variable length
+        based on the inner message length encoded in the wrapped message.
+        """
+        # Timer responses are wrapped, so we extract from the wrapper
+        if len(data) >= OUTER_MESSAGE_WRAPPER_START_LEN and data[0] == OUTER_MESSAGE_FIRST_BYTE:
+            inner_msg_len = (data[8] << 8) + data[9]
+            return OUTER_MESSAGE_WRAPPER_START_LEN + inner_msg_len + CHECKSUM_LEN
+        # Fallback
+        return len(data)
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

@@ -210,3 +210,15 @@ MUSIC_PIXELS_PER_SEGMENT_MAX: Final = 150
 PUSH_UPDATE_INTERVAL = 90  # seconds
 
 NEVER_TIME = -PUSH_UPDATE_INTERVAL
+
+
+# Extended Timer Action Types (0xB6 devices)
+TIMER_ACTION_ON: Final = 0x23
+TIMER_ACTION_OFF: Final = 0x24
+TIMER_ACTION_COLOR: Final = 0xA1
+TIMER_ACTION_SCENE_GRADIENT: Final = 0x29
+TIMER_ACTION_SCENE_SEGMENTS: Final = 0x6B
+
+# Extended Timer Effect Types
+TIMER_EFFECT_GRADIENT: Final = 0x21  # e1 21 - gradient overlay
+TIMER_EFFECT_SEGMENTS: Final = 0x22  # e1 22 - static segments/colorful
