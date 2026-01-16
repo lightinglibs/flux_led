@@ -1032,13 +1032,34 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a message is the start of a state response."""
         return _message_type_from_start_of_msg(data) == MSG_POWER_STATE
 
+    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+        """Check if this is an extended state response (0xEA 0x81 format).
+
+        Some devices (like 0xB6) only respond with extended state format.
+        This allows probing to recognize these responses.
+        """
+        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
+
     def is_valid_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
+        # Check for extended state format (0xEA 0x81) first
+        if self.is_valid_extended_state_response(raw_state):
+            return True
+        # Check for standard state format (0x81)
         if len(raw_state) != self.state_response_length:
             return False
         if raw_state[0] != 129:
             return False
         return self.is_checksum_correct(raw_state)
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert an extended state response to a standard state response.
+
+        This is overridden by ProtocolLEDENET25Byte with the actual conversion logic.
+        Default implementation returns raw_state unchanged for protocols that don't
+        use extended state.
+        """
+        return raw_state
 
     def construct_state_change(self, turn_on: int) -> bytearray:
         """

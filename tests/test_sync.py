@@ -1448,7 +1448,7 @@ class TestLight(unittest.TestCase):
         mock_read.side_effect = read_data
         light = flux_led.WifiLedBulb("192.168.1.164")
 
-        assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
+        assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
         self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
         self.assertEqual(light.model_num, 0xB6)
         self.assertEqual(light.version_num, 1)

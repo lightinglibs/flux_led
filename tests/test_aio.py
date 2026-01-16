@@ -23,6 +23,7 @@ from flux_led.aioprotocol import AIOLEDENETProtocol
 from flux_led.aioscanner import AIOBulbScanner, LEDENETDiscovery
 from flux_led.const import (
     COLOR_MODE_CCT,
+    COLOR_MODE_DIM,
     COLOR_MODE_RGB,
     COLOR_MODE_RGBW,
     COLOR_MODE_RGBWW,
@@ -4358,7 +4359,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     assert light.version_num == 1
     assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
     assert "Surplife" in light.model
-    assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_CCT}
+    assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
     assert light.supports_extended_custom_effects is True
     assert light.microphone is True
 
@@ -4466,7 +4467,7 @@ def test_extended_custom_effect_option_enum_values():
 
 def test_construct_extended_custom_effect_single_color():
     """Test constructing an extended custom effect with single color."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Single red color, pattern Wave, default settings
     result = proto.construct_extended_custom_effect(
@@ -4491,7 +4492,7 @@ def test_construct_extended_custom_effect_single_color():
 
 def test_construct_extended_custom_effect_multiple_colors():
     """Test constructing an extended custom effect with multiple colors."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Three colors: red, green, blue
     colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
@@ -4510,7 +4511,7 @@ def test_construct_extended_custom_effect_multiple_colors():
 
 def test_construct_extended_custom_effect_color_order():
     """Test that colors are stored in input order."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Two distinct colors
     colors = [(255, 0, 0), (0, 0, 255)]  # Red, Blue
@@ -4535,7 +4536,7 @@ def test_construct_extended_custom_effect_color_order():
 
 def test_construct_extended_custom_effect_hsv_conversion():
     """Test RGB to HSV conversion accuracy."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Test with a known color: pure green
     colors = [(0, 255, 0)]
@@ -4553,7 +4554,7 @@ def test_construct_extended_custom_effect_hsv_conversion():
 
 def test_construct_extended_custom_effect_speed_clamping():
     """Test that speed is clamped to 0-100."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Speed > 100 should be clamped
     result = proto.construct_extended_custom_effect(
@@ -4574,7 +4575,7 @@ def test_construct_extended_custom_effect_speed_clamping():
 
 def test_construct_extended_custom_effect_density_clamping():
     """Test that density is clamped to 0-100."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Density > 100 should be clamped
     result = proto.construct_extended_custom_effect(
@@ -4587,7 +4588,7 @@ def test_construct_extended_custom_effect_density_clamping():
 
 def test_construct_extended_custom_effect_max_colors():
     """Test constructing an effect with maximum 8 colors."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # 8 colors (maximum)
     colors = [
@@ -4613,7 +4614,7 @@ def test_construct_extended_custom_effect_max_colors():
 
 def test_construct_extended_custom_effect_with_enums():
     """Test using enum values for parameters."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     result = proto.construct_extended_custom_effect(
         pattern_id=ExtendedCustomEffectPattern.WAVE,
@@ -4629,7 +4630,7 @@ def test_construct_extended_custom_effect_with_enums():
 
 def test_construct_extended_custom_effect_with_variant_2():
     """Test using VARIANT_2 option (e.g., breathe mode for rainbow patterns)."""
-    proto = ProtocolLEDENET25Byte()
+    proto = ProtocolLEDENETExtendedCustom()
 
     # Rainbow colors with VARIANT_2 option
     colors = [

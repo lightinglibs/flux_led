@@ -1334,8 +1334,9 @@ MODELS = [
         # not work and will never work on this device.
         always_writes_white_and_colors=False,
         protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_EXTENDED_CUSTOM)],
-        mode_to_color_mode={0x01: COLOR_MODES_RGB_CCT, 0x17: COLOR_MODES_RGB_CCT},
-        color_modes=COLOR_MODES_RGB_CCT,
+        # Device has single white LED (not separate warm/cool), so use RGB_W not RGB_CCT
+        mode_to_color_mode={0x01: COLOR_MODES_RGB_W, 0x17: COLOR_MODES_RGB_W},
+        color_modes=COLOR_MODES_RGB_W,
         channel_map={},
         microphone=True,
         device_config=IMMUTABLE_DEVICE_CONFIG,
