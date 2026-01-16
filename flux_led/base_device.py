@@ -1356,7 +1356,7 @@ class LEDENETDevice:
                     raise ValueError(f"Color values must be 0-255, got {c}")
 
         assert self._protocol is not None
-        assert isinstance(self._protocol, ProtocolLEDENET25Byte)
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
         return self._protocol.construct_extended_custom_effect(
             pattern_id, colors, speed, density, direction, option
         )
@@ -1388,7 +1388,7 @@ class LEDENETDevice:
                     raise ValueError(f"Color values must be 0-255, got {c}")
 
         assert self._protocol is not None
-        assert isinstance(self._protocol, ProtocolLEDENET25Byte)
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
         return self._protocol.construct_custom_segment_colors(segments)
 
     def _effect_to_pattern(self, effect: str) -> int:
