@@ -15,6 +15,8 @@ try:
 except ImportError:
     from unittest.mock import MagicMock as AsyncMock
 
+from optparse import OptionParser
+
 import pytest
 
 from flux_led import DeviceUnavailableException, aiodevice, aioscanner
@@ -31,12 +33,18 @@ from flux_led.const import (
     MAX_TEMP,
     MIN_TEMP,
     PUSH_UPDATE_INTERVAL,
+    TIMER_ACTION_COLOR,
+    TIMER_ACTION_OFF,
+    TIMER_ACTION_ON,
+    TIMER_ACTION_SCENE_GRADIENT,
+    TIMER_ACTION_SCENE_SEGMENTS,
     ExtendedCustomEffectDirection,
     ExtendedCustomEffectOption,
     ExtendedCustomEffectPattern,
     MultiColorEffects,
     WhiteChannelType,
 )
+from flux_led.fluxled import processSetTimerArgs, processSetTimerArgsExtended
 from flux_led.models_db import extract_model_version_from_state
 from flux_led.protocol import (
     LEDENET_EXTENDED_STATE_RESPONSE_LEN,
@@ -63,7 +71,7 @@ from flux_led.scanner import (
     is_legacy_device,
     merge_discoveries,
 )
-from flux_led.timer import LedTimer
+from flux_led.timer import LedTimer, LedTimerExtended
 
 IP_ADDRESS = "127.0.0.1"
 MODEL_NUM_HEX = "0x35"
@@ -5625,7 +5633,9 @@ def test_protocol_parse_get_timers_with_color_0xB6():
     # Build a timer response with color action (0xa1)
     # Slot 1: 17:15, Sun+Tue repeat (0x84), color action with HSV
     inner_slot1 = bytes.fromhex("01f0110f00840ee00100a17be432000000000000")
-    inner_empty = bytes.fromhex("02000000000000030000000000000400000000000005000000000000060000000000")
+    inner_empty = bytes.fromhex(
+        "02000000000000030000000000000400000000000005000000000000060000000000"
+    )
 
     response = bytes([0xE0, 0x06]) + inner_slot1 + inner_empty
     timers = proto.parse_get_timers(response)
@@ -5642,9 +5652,6 @@ def test_protocol_parse_get_timers_with_color_0xB6():
 
 def test_led_timer_extended_simple_on():
     """Test LedTimerExtended for simple ON action."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_ON
-
     timer = LedTimerExtended(
         slot=1,
         active=True,
@@ -5669,9 +5676,6 @@ def test_led_timer_extended_simple_on():
 
 def test_led_timer_extended_simple_off():
     """Test LedTimerExtended for simple OFF action."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_OFF
-
     timer = LedTimerExtended(
         slot=2,
         active=True,
@@ -5690,9 +5694,6 @@ def test_led_timer_extended_simple_off():
 
 def test_led_timer_extended_color():
     """Test LedTimerExtended for color action."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_COLOR
-
     timer = LedTimerExtended(
         slot=1,
         active=True,
@@ -5716,8 +5717,6 @@ def test_led_timer_extended_color():
 
 def test_led_timer_extended_inactive():
     """Test LedTimerExtended for inactive timer."""
-    from flux_led.timer import LedTimerExtended
-
     timer = LedTimerExtended(
         slot=3,
         active=False,
@@ -5730,8 +5729,6 @@ def test_led_timer_extended_inactive():
 
 def test_led_timer_extended_from_bytes_simple():
     """Test LedTimerExtended.from_bytes for simple timer."""
-    from flux_led.timer import LedTimerExtended
-
     # Simple OFF timer: slot 1, 13:25, no repeat (21 bytes)
     data = bytes.fromhex("01f00d1900000ee001002400000000000000000000")
 
@@ -5748,8 +5745,6 @@ def test_led_timer_extended_from_bytes_simple():
 
 def test_led_timer_extended_from_bytes_empty():
     """Test LedTimerExtended.from_bytes for empty slot."""
-    from flux_led.timer import LedTimerExtended
-
     # Empty slot
     data = bytes.fromhex("0300000000000000")
 
@@ -5762,9 +5757,6 @@ def test_led_timer_extended_from_bytes_empty():
 
 def test_led_timer_extended_str():
     """Test LedTimerExtended string representation."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_OFF, TIMER_ACTION_ON, TIMER_ACTION_COLOR
-
     timer_off = LedTimerExtended(
         slot=1, active=True, hour=22, minute=0, action_type=TIMER_ACTION_OFF
     )
@@ -5788,9 +5780,6 @@ def test_led_timer_extended_str():
 
 def test_protocol_construct_set_timer_0xB6():
     """Test timer set construction for 0xB6 device."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_OFF
-
     proto = ProtocolLEDENETExtendedCustom()
 
     timer = LedTimerExtended(
@@ -5816,12 +5805,6 @@ def test_protocol_construct_set_timer_0xB6():
 
 def test_led_timer_extended_scene_gradient():
     """Test LedTimerExtended for scene gradient action."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import (
-        TIMER_ACTION_SCENE_GRADIENT,
-        ExtendedCustomEffectPattern,
-    )
-
     timer = LedTimerExtended(
         slot=1,
         active=True,
@@ -5855,9 +5838,6 @@ def test_led_timer_extended_scene_gradient():
 
 def test_led_timer_extended_scene_segments():
     """Test LedTimerExtended for scene segments (colorful) action."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_SCENE_SEGMENTS
-
     timer = LedTimerExtended(
         slot=2,
         active=True,
@@ -5884,16 +5864,13 @@ def test_led_timer_extended_scene_segments():
 
 def test_led_timer_extended_from_bytes_scene_gradient():
     """Test LedTimerExtended.from_bytes for scene gradient timer."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_SCENE_GRADIENT
-
     # Scene gradient timer from real device data:
     # slot=4, 18:38, repeat=0x0f, action=0x29, e1 21 header, 5 colors
     data = bytes.fromhex(
         "04f0122600f629e12100500300016450000000000000050c646400001e646400005a646400006ce464000096646400"
     )
 
-    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+    timer, _consumed = LedTimerExtended.from_bytes(data, 0)
 
     assert timer.slot == 4
     assert timer.active is True
@@ -5908,29 +5885,26 @@ def test_led_timer_extended_from_bytes_scene_gradient():
 
 def test_led_timer_extended_from_bytes_scene_segments():
     """Test LedTimerExtended.from_bytes for scene segments timer."""
-    from flux_led.timer import LedTimerExtended
-    from flux_led.const import TIMER_ACTION_SCENE_SEGMENTS
-
     # Scene segments timer: slot=1, 12:00, e1 22 header, 3 colors
     # Construct a minimal segments timer
     data = bytearray()
     data.append(0x01)  # slot
     data.append(0xF0)  # flags
-    data.append(12)    # hour
-    data.append(0)     # minute
-    data.append(0)     # seconds
-    data.append(0)     # repeat
+    data.append(12)  # hour
+    data.append(0)  # minute
+    data.append(0)  # seconds
+    data.append(0)  # repeat
     data.append(0x6B)  # action (segments)
     data.append(0xE1)  # effect marker
     data.append(0x22)  # segments type
     data.extend([0, 0, 0, 0])  # header padding
-    data.append(3)     # num colors
+    data.append(3)  # num colors
     # 3 colors (5 bytes each)
     data.extend([100, 100, 50, 0, 0])
     data.extend([50, 80, 60, 0, 0])
     data.extend([150, 90, 70, 0, 0])
 
-    timer, consumed = LedTimerExtended.from_bytes(bytes(data), 0)
+    timer, _consumed = LedTimerExtended.from_bytes(bytes(data), 0)
 
     assert timer.slot == 1
     assert timer.active is True
@@ -5943,8 +5917,6 @@ def test_led_timer_extended_from_bytes_scene_segments():
 
 def test_led_timer_extended_str_unknown_action():
     """Test LedTimerExtended.__str__ for unknown action type."""
-    from flux_led.timer import LedTimerExtended
-
     timer = LedTimerExtended(
         slot=1,
         active=True,
@@ -5959,11 +5931,9 @@ def test_led_timer_extended_str_unknown_action():
 
 def test_led_timer_extended_from_bytes_truncated():
     """Test LedTimerExtended.from_bytes handles truncated data."""
-    from flux_led.timer import LedTimerExtended
-
     # Only 5 bytes - not enough for a valid timer
     data = bytes([0x01, 0xF0, 12, 30, 0])
-    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+    _timer, consumed = LedTimerExtended.from_bytes(data, 0)
     assert consumed == 5  # Returns what's available
 
 
@@ -5974,11 +5944,6 @@ def test_led_timer_extended_from_bytes_truncated():
 
 def test_cli_process_set_timer_args_extended_inactive():
     """Test CLI parsing for inactive extended timer."""
-    from optparse import OptionParser
-
-    from flux_led.const import TIMER_ACTION_OFF
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
     timer = processSetTimerArgsExtended(parser, ["1", "inactive", ""])
     assert timer.slot == 1
@@ -5988,11 +5953,6 @@ def test_cli_process_set_timer_args_extended_inactive():
 
 def test_cli_process_set_timer_args_extended_poweroff():
     """Test CLI parsing for poweroff extended timer."""
-    from optparse import OptionParser
-
-    from flux_led.const import TIMER_ACTION_OFF
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
     timer = processSetTimerArgsExtended(
         parser, ["2", "poweroff", "time:1430;repeat:12345"]
@@ -6008,15 +5968,8 @@ def test_cli_process_set_timer_args_extended_poweroff():
 
 def test_cli_process_set_timer_args_extended_default_on():
     """Test CLI parsing for default (on) extended timer."""
-    from optparse import OptionParser
-
-    from flux_led.const import TIMER_ACTION_ON
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
-    timer = processSetTimerArgsExtended(
-        parser, ["3", "default", "time:0830;repeat:06"]
-    )
+    timer = processSetTimerArgsExtended(parser, ["3", "default", "time:0830;repeat:06"])
     assert timer.slot == 3
     assert timer.active is True
     assert timer.hour == 8
@@ -6028,11 +5981,6 @@ def test_cli_process_set_timer_args_extended_default_on():
 
 def test_cli_process_set_timer_args_extended_color():
     """Test CLI parsing for color extended timer."""
-    from optparse import OptionParser
-
-    from flux_led.const import TIMER_ACTION_COLOR
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
     # Use color name instead of hex code (hex needs # prefix)
     timer = processSetTimerArgsExtended(
@@ -6050,11 +5998,6 @@ def test_cli_process_set_timer_args_extended_color():
 
 def test_cli_process_set_timer_args_extended_color_with_brightness():
     """Test CLI parsing for color extended timer with brightness."""
-    from optparse import OptionParser
-
-    from flux_led.const import TIMER_ACTION_COLOR
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
     # Use hex with # prefix
     timer = processSetTimerArgsExtended(
@@ -6070,10 +6013,6 @@ def test_cli_process_set_timer_args_extended_color_with_brightness():
 
 def test_cli_process_set_timer_args_extended_weekend_repeat():
     """Test CLI parsing for weekend repeat (0=Sun, 6=Sat)."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
     timer = processSetTimerArgsExtended(
         parser, ["1", "poweroff", "time:2200;repeat:06"]
@@ -6084,10 +6023,6 @@ def test_cli_process_set_timer_args_extended_weekend_repeat():
 
 def test_cli_process_set_timer_args_extended_everyday_repeat():
     """Test CLI parsing for everyday repeat (0123456)."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgsExtended
-
     parser = OptionParser()
     timer = processSetTimerArgsExtended(
         parser, ["1", "default", "time:0700;repeat:0123456"]
@@ -6099,10 +6034,6 @@ def test_cli_process_set_timer_args_extended_everyday_repeat():
 
 def test_cli_process_set_timer_args_standard_inactive():
     """Test CLI parsing for inactive standard timer."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgs
-
     parser = OptionParser()
     timer = processSetTimerArgs(parser, ["1", "inactive", ""])
     assert timer.isActive() is False
@@ -6110,14 +6041,8 @@ def test_cli_process_set_timer_args_standard_inactive():
 
 def test_cli_process_set_timer_args_standard_poweroff():
     """Test CLI parsing for poweroff standard timer."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgs
-
     parser = OptionParser()
-    timer = processSetTimerArgs(
-        parser, ["2", "poweroff", "time:1430;repeat:12345"]
-    )
+    timer = processSetTimerArgs(parser, ["2", "poweroff", "time:1430;repeat:12345"])
     assert timer.isActive() is True
     assert timer.hour == 14
     assert timer.minute == 30
@@ -6127,14 +6052,8 @@ def test_cli_process_set_timer_args_standard_poweroff():
 
 def test_cli_process_set_timer_args_standard_default():
     """Test CLI parsing for default (on) standard timer."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgs
-
     parser = OptionParser()
-    timer = processSetTimerArgs(
-        parser, ["3", "default", "time:0830;repeat:06"]
-    )
+    timer = processSetTimerArgs(parser, ["3", "default", "time:0830;repeat:06"])
     assert timer.isActive() is True
     assert timer.hour == 8
     assert timer.minute == 30
@@ -6142,10 +6061,6 @@ def test_cli_process_set_timer_args_standard_default():
 
 def test_cli_process_set_timer_args_standard_color():
     """Test CLI parsing for color standard timer."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgs
-
     parser = OptionParser()
     timer = processSetTimerArgs(
         parser, ["4", "color", "time:2100;repeat:0123456;color:255,0,0"]
@@ -6160,10 +6075,6 @@ def test_cli_process_set_timer_args_standard_color():
 
 def test_cli_process_set_timer_args_standard_warmwhite():
     """Test CLI parsing for warmwhite standard timer."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgs
-
     parser = OptionParser()
     timer = processSetTimerArgs(
         parser, ["5", "warmwhite", "time:2200;repeat:12345;level:75"]
@@ -6177,10 +6088,6 @@ def test_cli_process_set_timer_args_standard_warmwhite():
 
 def test_cli_process_set_timer_args_standard_preset():
     """Test CLI parsing for preset standard timer."""
-    from optparse import OptionParser
-
-    from flux_led.fluxled import processSetTimerArgs
-
     parser = OptionParser()
     timer = processSetTimerArgs(
         parser, ["6", "preset", "time:1800;repeat:06;code:37;speed:50"]
@@ -6198,8 +6105,6 @@ def test_cli_process_set_timer_args_standard_preset():
 
 def test_led_timer_standard_str_inactive():
     """Test LedTimer.__str__ for inactive timer."""
-    from flux_led.timer import LedTimer
-
     timer = LedTimer()
     timer.setActive(False)
     assert str(timer) == "Unset"
@@ -6207,8 +6112,6 @@ def test_led_timer_standard_str_inactive():
 
 def test_led_timer_standard_str_on():
     """Test LedTimer.__str__ for turn-on timer."""
-    from flux_led.timer import LedTimer
-
     timer = LedTimer()
     timer.setActive(True)
     timer.setTime(8, 30)
@@ -6225,8 +6128,6 @@ def test_led_timer_standard_str_on():
 
 def test_led_timer_standard_str_off():
     """Test LedTimer.__str__ for turn-off timer."""
-    from flux_led.timer import LedTimer
-
     timer = LedTimer()
     timer.setActive(True)
     timer.setTime(22, 0)
@@ -6240,8 +6141,6 @@ def test_led_timer_standard_str_off():
 
 def test_led_timer_standard_str_once():
     """Test LedTimer.__str__ for one-time timer."""
-    from flux_led.timer import LedTimer
-
     timer = LedTimer()
     timer.setActive(True)
     timer.setTime(14, 30)
@@ -6257,8 +6156,6 @@ def test_led_timer_standard_str_once():
 
 def test_led_timer_standard_str_color():
     """Test LedTimer.__str__ for color timer."""
-    from flux_led.timer import LedTimer
-
     timer = LedTimer()
     timer.setActive(True)
     timer.setTime(19, 0)
@@ -6270,5 +6167,3 @@ def test_led_timer_standard_str_color():
     assert "19:00" in s
     assert "Sa" in s
     assert "Su" in s
-
-

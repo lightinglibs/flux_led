@@ -2016,7 +2016,9 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             inner, inner_pre_constructed=True, version=0x01
         )
 
-    def construct_set_timers(self, timer_list: list[LedTimerExtended]) -> list[bytearray]:  # type: ignore[override]
+    def construct_set_timers(  # type: ignore[override]
+        self, timer_list: list[LedTimerExtended]
+    ) -> list[bytearray]:
         """Construct set timer commands for multiple timers.
 
         0xB6 devices set timers one at a time, so this returns a list
@@ -2081,7 +2083,10 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         based on the inner message length encoded in the wrapped message.
         """
         # Timer responses are wrapped, so we extract from the wrapper
-        if len(data) >= OUTER_MESSAGE_WRAPPER_START_LEN and data[0] == OUTER_MESSAGE_FIRST_BYTE:
+        if (
+            len(data) >= OUTER_MESSAGE_WRAPPER_START_LEN
+            and data[0] == OUTER_MESSAGE_FIRST_BYTE
+        ):
             inner_msg_len = (data[8] << 8) + data[9]
             return OUTER_MESSAGE_WRAPPER_START_LEN + inner_msg_len + CHECKSUM_LEN
         # Fallback

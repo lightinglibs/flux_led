@@ -204,6 +204,7 @@ ASSESSABLE_MULTI_COLOR_NAME_ID = {
 # Extended custom effect pattern names for 0xB6 (Surplife) devices
 # These map to ExtendedCustomEffectPattern enum values
 EXTENDED_CUSTOM_EFFECT_ID_NAME = {
+    0x00: "Segments",  # Custom segment colors mode
     0x01: "Wave",
     0x02: "Meteor",
     0x03: "Streamer",

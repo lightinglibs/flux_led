@@ -45,18 +45,18 @@ import datetime
 import logging
 import sys
 from optparse import OptionGroup, OptionParser, Values
-from typing import Any
+from typing import Any, cast
 
 from .aio import AIOWifiLedBulb
 from .aioscanner import AIOBulbScanner
 from .const import (
     ATTR_ID,
     ATTR_IPADDR,
+    TIMER_ACTION_COLOR,
+    TIMER_ACTION_OFF,
+    TIMER_ACTION_ON,
     ExtendedCustomEffectDirection,
     ExtendedCustomEffectPattern,
-    TIMER_ACTION_ON,
-    TIMER_ACTION_OFF,
-    TIMER_ACTION_COLOR,
 )
 from .pattern import PresetPattern
 from .protocol import ProtocolLEDENETExtendedCustom
@@ -116,17 +116,14 @@ Set preset pattern #35 with 40% speed:
 Set custom pattern 25% speed, red/green/blue, gradual change:
     %prog% 192.168.1.100 -C gradual 25 "red green (0,0,255)"
 
-Set extended custom effect (0xB6 devices) - wave pattern, 80% speed, 50% density:
-    %prog% 192.168.1.100 -E 1 80 50 "red green blue"
+Set extended custom effect (0xB6 devices) - wave pattern, 80% speed:
+    %prog% 192.168.1.100 -C wave 80 "red green blue"
 
-Set extended effect with right-to-left direction and color change option:
-    %prog% 192.168.1.100 -E 2 50 75 "purple orange" --direction r2l --colorchange
+Set extended effect with density, direction, and color change options:
+    %prog% 192.168.1.100 -C meteor 50 "purple orange" --density 75 --direction r2l --colorchange
 
 Set custom segment colors (0xB6 devices) - set each segment individually:
-    %prog% 192.168.1.100 -G "red green blue off off red green blue"
-
-List available extended effect patterns:
-    %prog% --listextended
+    %prog% 192.168.1.100 -C segments 0 "red green blue off off red green blue"
 
 Sync all bulb's clocks with this computer's:
     %prog% -sS --setclock
@@ -471,6 +468,9 @@ def processSetTimerArgsExtended(
         if "color" not in settings_dict:
             parser.error("color mode needs a color setting")
         color_val = settings_dict["color"]
+        # If it looks like hex without # prefix (6 hex chars), add the prefix
+        if len(color_val) == 6 and all(c in "0123456789abcdef" for c in color_val):
+            color_val = "#" + color_val
         rgb = utils.color_object_to_tuple(color_val)
         if rgb is None:
             parser.error(f"Invalid color value: {color_val}")
@@ -498,8 +498,7 @@ def processSetTimerArgsExtended(
         brightness = 100
         if "brightness" in settings_dict:
             brightness = int(settings_dict["brightness"])
-            if brightness > 100:
-                brightness = 100
+            brightness = min(brightness, 100)
 
         return LedTimerExtended(
             slot=slot,
@@ -517,150 +516,154 @@ def processSetTimerArgsExtended(
 
 
 def processCustomArgs(
-    parser: OptionParser, args: Any
-) -> tuple[Any, int, list[tuple[int, ...]]] | None:
-    if args[0] not in ["gradual", "jump", "strobe"]:
-        parser.error(f"bad pattern type: {args[0]}")
-        return None
+    parser: OptionParser,
+    args: Any,
+    density: int = 50,
+    direction: str = "l2r",
+    colorchange: bool = False,
+) -> dict[str, Any] | None:
+    """Process custom pattern arguments.
 
+    Supports both standard patterns (jump, gradual, strobe) and extended
+    patterns (wave, meteor, etc.) for devices that support them.
+
+    Returns a dict with:
+        - mode: "standard", "extended", or "segments"
+        - For standard: type, speed, colors
+        - For extended: pattern_id, speed, density, colors, direction, option
+        - For segments: colors (list of up to 20 colors)
+    """
+    # Build mapping of extended pattern names to IDs
+    extended_pattern_names = {
+        p.name.lower().replace("_", " "): p.value for p in ExtendedCustomEffectPattern
+    }
+    # Also add underscore versions and single word versions
+    for p in ExtendedCustomEffectPattern:
+        extended_pattern_names[p.name.lower()] = p.value
+
+    pattern_type = args[0].lower()
     speed = int(args[1])
 
-    # convert the string to a list of RGB tuples
-    # it should have space separated items of either
-    # color names, hex values, or byte triples
-    try:
-        color_list_str = args[2].strip()
-        str_list = color_list_str.split(" ")
-        color_list = []
-        for s in str_list:
-            c = utils.color_object_to_tuple(s)
-            if c is not None:
-                color_list.append(c)
-            else:
-                raise Exception
-
-    except Exception:
-        parser.error(
-            "COLORLIST isn't formatted right.  It should be a space separated list of RGB tuples, color names or web hex values"
-        )
-
-    return args[0], speed, color_list
-
-
-def processSegmentArgs(
-    parser: OptionParser, args: str
-) -> list[tuple[int, int, int] | None] | None:
-    """Process custom segment colors arguments.
-
-    Returns: List of up to 20 RGB tuples or None for off segments.
-    """
-    try:
-        color_list_str = args.strip()
-        str_list = color_list_str.split(" ")
-        segment_list: list[tuple[int, int, int] | None] = []
-        for s in str_list:
-            s = s.strip().lower()
-            if not s:
-                continue
-            if s == "off":
-                segment_list.append(None)
-            else:
+    # Check if this is a standard pattern
+    if pattern_type in ["gradual", "jump", "strobe"]:
+        # Standard custom pattern
+        try:
+            color_list_str = args[2].strip()
+            str_list = color_list_str.split(" ")
+            color_list: list[tuple[int, ...]] = []
+            for s in str_list:
                 c = utils.color_object_to_tuple(s)
-                if c is not None and len(c) >= 3:
-                    segment_list.append((c[0], c[1], c[2]))
+                if c is not None:
+                    color_list.append(c)
                 else:
                     raise ValueError(f"Invalid color: {s}")
-        if len(segment_list) == 0:
-            parser.error("At least one segment color is required")
+        except Exception:
+            parser.error(
+                "COLORLIST isn't formatted right. It should be a space separated list "
+                "of RGB tuples, color names or web hex values"
+            )
             return None
-        if len(segment_list) > 20:
-            print("Warning: More than 20 segments provided, truncating to 20")
-            segment_list = segment_list[:20]
-        return segment_list
-    except Exception as e:
-        parser.error(
-            f"SEGMENTLIST isn't formatted right: {e}. "
-            "It should be a space-separated list of color names, hex values, RGB triples, or 'off'"
-        )
-        return None
 
+        return {
+            "mode": "standard",
+            "type": pattern_type,
+            "speed": speed,
+            "colors": color_list,
+        }
 
-def processExtendedArgs(
-    parser: OptionParser, args: Any, direction: str, colorchange: bool
-) -> tuple[int, int, int, list[tuple[int, int, int]], int, int] | None:
-    """Process extended custom effect arguments.
-
-    Returns: (pattern_id, speed, density, color_list, direction, option)
-    """
-    # Validate pattern ID
-    try:
-        pattern_id = int(args[0])
-    except ValueError:
-        parser.error(f"PATTERN must be a number, got: {args[0]}")
-        return None
-
-    valid_pattern_ids = set(range(1, 23)) | {101, 102}
-    if pattern_id not in valid_pattern_ids:
-        parser.error(f"PATTERN must be 1-22 or 101-102, got: {pattern_id}")
-        return None
-
-    # Validate speed
-    try:
-        speed = int(args[1])
-        if speed < 0 or speed > 100:
-            parser.error("SPEED must be 0-100")
+    # Check if this is "segments" mode
+    if pattern_type == "segments":
+        try:
+            color_list_str = args[2].strip()
+            str_list = color_list_str.split(" ")
+            segment_list: list[tuple[int, int, int] | None] = []
+            for s in str_list:
+                s = s.strip().lower()
+                if not s:
+                    continue
+                if s == "off":
+                    segment_list.append(None)
+                else:
+                    c = utils.color_object_to_tuple(s)
+                    if c is not None and len(c) >= 3:
+                        segment_list.append((c[0], c[1], c[2]))
+                    else:
+                        raise ValueError(f"Invalid color: {s}")
+            if len(segment_list) == 0:
+                parser.error("At least one segment color is required")
+                return None
+            if len(segment_list) > 20:
+                print("Warning: More than 20 segments provided, truncating to 20")
+                segment_list = segment_list[:20]
+        except Exception as e:
+            parser.error(
+                f"COLORLIST isn't formatted right: {e}. It should be a space-separated "
+                "list of color names, hex values, RGB triples, or 'off'"
+            )
             return None
-    except ValueError:
-        parser.error(f"SPEED must be a number, got: {args[1]}")
-        return None
 
-    # Validate density
-    try:
-        density = int(args[2])
-        if density < 0 or density > 100:
-            parser.error("DENSITY must be 0-100")
+        return {
+            "mode": "segments",
+            "colors": segment_list,
+        }
+
+    # Check if this is an extended pattern name
+    if pattern_type in extended_pattern_names:
+        pattern_id = extended_pattern_names[pattern_type]
+
+        # Parse color list
+        try:
+            color_list_str = args[2].strip()
+            str_list = color_list_str.split(" ")
+            ext_color_list: list[tuple[int, int, int]] = []
+            for s in str_list:
+                c = utils.color_object_to_tuple(s)
+                if c is not None and len(c) >= 3:
+                    ext_color_list.append((c[0], c[1], c[2]))
+                else:
+                    raise ValueError(f"Invalid color: {s}")
+            if len(ext_color_list) == 0:
+                parser.error("At least one color is required")
+                return None
+            if len(ext_color_list) > 8:
+                print("Warning: More than 8 colors provided, truncating to 8")
+                ext_color_list = ext_color_list[:8]
+        except Exception as e:
+            parser.error(
+                f"COLORLIST isn't formatted right: {e}. It should be a space-separated "
+                "list of color names, hex values, or RGB triples"
+            )
             return None
-    except ValueError:
-        parser.error(f"DENSITY must be a number, got: {args[2]}")
-        return None
 
-    # Parse color list
-    try:
-        color_list_str = args[3].strip()
-        str_list = color_list_str.split(" ")
-        color_list: list[tuple[int, int, int]] = []
-        for s in str_list:
-            c = utils.color_object_to_tuple(s)
-            if c is not None and len(c) >= 3:
-                color_list.append((c[0], c[1], c[2]))
-            else:
-                raise ValueError(f"Invalid color: {s}")
-        if len(color_list) == 0:
-            parser.error("At least one color is required")
+        # Parse direction
+        if direction.lower() in ("l2r", "left", "ltr"):
+            dir_value = ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value
+        elif direction.lower() in ("r2l", "right", "rtl"):
+            dir_value = ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value
+        else:
+            parser.error(f"Invalid direction: {direction}. Use l2r or r2l")
             return None
-        if len(color_list) > 8:
-            print("Warning: More than 8 colors provided, truncating to 8")
-            color_list = color_list[:8]
-    except Exception as e:
-        parser.error(
-            f"COLORLIST isn't formatted right: {e}. "
-            "It should be a space-separated list of color names, hex values, or RGB triples"
-        )
-        return None
 
-    # Parse direction
-    if direction.lower() in ("l2r", "left", "ltr"):
-        dir_value = ExtendedCustomEffectDirection.LEFT_TO_RIGHT
-    elif direction.lower() in ("r2l", "right", "rtl"):
-        dir_value = ExtendedCustomEffectDirection.RIGHT_TO_LEFT
-    else:
-        parser.error(f"Invalid direction: {direction}. Use l2r or r2l")
-        return None
+        # Option value
+        option_value = 0x01 if colorchange else 0x00
 
-    # Option value
-    option_value = 0x01 if colorchange else 0x00
+        return {
+            "mode": "extended",
+            "pattern_id": pattern_id,
+            "speed": speed,
+            "density": density,
+            "colors": ext_color_list,
+            "direction": dir_value,
+            "option": option_value,
+        }
 
-    return pattern_id, speed, density, color_list, dir_value.value, option_value
+    # Unknown pattern type - show valid options
+    parser.error(
+        f"Unknown pattern type: {pattern_type}. Valid types include: "
+        f"jump, gradual, strobe, segments, wave, meteor, breathe, etc. "
+        f"Use --listpresets for the full list."
+    )
+    return None
 
 
 def parseArgs() -> tuple[Values, Any]:
@@ -704,14 +707,7 @@ def parseArgs() -> tuple[Values, Any]:
         action="store_true",
         dest="listpresets",
         default=False,
-        help="List preset codes",
-    )
-    info_group.add_option(
-        "--listextended",
-        action="store_true",
-        dest="listextended",
-        default=False,
-        help="List extended custom effect pattern codes (for 0xB6 devices)",
+        help="List preset codes (including extended patterns for 0xB6 devices)",
     )
     info_group.add_option(
         "--listcolors",
@@ -811,35 +807,22 @@ def parseArgs() -> tuple[Values, Any]:
         default=None,
         nargs=3,
         help="Set custom pattern mode. "
-        + "TYPE should be jump, gradual, or strobe. SPEED is percent. "
-        + "COLORLIST is a space-separated list of color names, web hex values, or comma-separated RGB triples",
-    )
-    mode_group.add_option(
-        "-E",
-        "--extended",
-        dest="extended",
-        metavar="PATTERN SPEED DENSITY COLORLIST",
-        default=None,
-        nargs=4,
-        help="Set extended custom effect (0xB6 devices). "
-        + "PATTERN is code 1-22 or 101-102 (use --listextended). "
-        + "SPEED and DENSITY are 0-100. "
-        + "COLORLIST is space-separated colors (1-8 colors). "
-        + "Use --direction and --colorchange for additional options.",
-    )
-    mode_group.add_option(
-        "-G",
-        "--segments",
-        dest="segments",
-        metavar="SEGMENTLIST",
-        default=None,
-        help="Set custom segment colors (0xB6 devices). "
-        + "SEGMENTLIST is a space-separated list of up to 20 colors. "
-        + "Use 'off' for segments that should be off. "
-        + "Example: 'red green blue off off red'",
+        + "TYPE: jump, gradual, strobe (standard), or extended pattern names "
+        + "(wave, meteor, breathe, etc. for 0xB6 devices), or 'segments' for static colors. "
+        + "SPEED is percent (0-100). "
+        + "COLORLIST is a space-separated list of color names, hex values, or RGB triples. "
+        + "Use --density, --direction, --colorchange for extended pattern options.",
     )
     parser.add_option_group(mode_group)
 
+    other_group.add_option(
+        "--density",
+        dest="density",
+        default=50,
+        type="int",
+        metavar="DENSITY",
+        help="Pattern density 0-100 for extended effects (default: 50)",
+    )
     other_group.add_option(
         "--direction",
         dest="direction",
@@ -934,16 +917,20 @@ def parseArgs() -> tuple[Values, Any]:
         sys.exit(0)
 
     if options.listpresets:
+        print("Standard preset patterns (-p option):")
         for c in range(
             PresetPattern.seven_color_cross_fade, PresetPattern.seven_color_jumping + 1
         ):
-            print(f"{c:2} {PresetPattern.valtostr(c)}")
-        sys.exit(0)
-
-    if options.listextended:
-        print("Extended custom effect patterns (for 0xB6 devices):")
+            print(f"  {c:2} {PresetPattern.valtostr(c)}")
+        print("\nStandard custom pattern types (-C option):")
+        print("  jump     - Colors change instantly")
+        print("  gradual  - Colors fade smoothly")
+        print("  strobe   - Colors flash rapidly")
+        print("\nExtended custom patterns (-C option, 0xB6 devices only):")
         for p in ExtendedCustomEffectPattern:
-            print(f"{p.value:3} (0x{p.value:02X}) {p.name.lower().replace('_', ' ')}")
+            print(f"  {p.name.lower().replace('_', ' '):<20} (ID: {p.value})")
+        print("\nSegment colors (-C segments, 0xB6 devices only):")
+        print("  segments - Set individual segment colors (up to 20)")
         sys.exit(0)
 
     if options.listcolors:
@@ -969,28 +956,22 @@ def parseArgs() -> tuple[Values, Any]:
         mode_count += 1
     if options.custom:
         mode_count += 1
-    if options.extended:
-        mode_count += 1
-    if options.segments:
-        mode_count += 1
     if mode_count > 1:
         parser.error(
-            "options --color, --*white, --preset, --CCT, --custom, --extended, and --segments are mutually exclusive"
+            "options --color, --*white, --preset, --CCT, and --custom are mutually exclusive"
         )
 
     if options.on and options.off:
         parser.error("options --on and --off are mutually exclusive")
 
     if options.custom:
-        options.custom = processCustomArgs(parser, options.custom)
-
-    if options.extended:
-        options.extended = processExtendedArgs(
-            parser, options.extended, options.direction, options.colorchange
+        options.custom = processCustomArgs(
+            parser,
+            options.custom,
+            density=options.density,
+            direction=options.direction,
+            colorchange=options.colorchange,
         )
-
-    if options.segments:
-        options.segments = processSegmentArgs(parser, options.segments)
 
     if options.color:
         options.color = utils.color_object_to_tuple(options.color)
@@ -1121,57 +1102,73 @@ async def _async_run_commands(
             )
 
     elif options.custom is not None:
-        await bulb.async_set_custom_pattern(
-            options.custom[2], options.custom[1], options.custom[0]
-        )
-        buf_in(
-            f"Setting custom pattern: {options.custom[0]}, Speed={options.custom[1]}%, {options.custom[2]}"
-        )
+        custom = options.custom
+        mode = custom["mode"]
+
+        if mode == "standard":
+            # Standard custom pattern (jump, gradual, strobe)
+            await bulb.async_set_custom_pattern(
+                custom["colors"], custom["speed"], custom["type"]
+            )
+            buf_in(
+                f"Setting custom pattern: {custom['type']}, "
+                f"Speed={custom['speed']}%, {custom['colors']}"
+            )
+
+        elif mode == "extended":
+            # Extended custom effect (wave, meteor, etc.)
+            if not bulb.supports_extended_custom_effects:
+                raise ValueError(
+                    f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
+                    "does not support extended custom effects. "
+                    "Use jump, gradual, or strobe for this device."
+                )
+            pattern_id = custom["pattern_id"]
+            speed = custom["speed"]
+            density = custom["density"]
+            colors = custom["colors"]
+            direction = custom["direction"]
+            option = custom["option"]
+
+            # Get pattern name for display
+            try:
+                pattern_name = (
+                    ExtendedCustomEffectPattern(pattern_id)
+                    .name.lower()
+                    .replace("_", " ")
+                )
+            except ValueError:
+                pattern_name = f"pattern {pattern_id}"
+            dir_name = (
+                "L->R"
+                if direction == ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value
+                else "R->L"
+            )
+            buf_in(
+                f"Setting extended effect: {pattern_name}, "
+                f"Speed={speed}%, Density={density}%, Direction={dir_name}, "
+                f"Colors={colors}"
+            )
+            await bulb.async_set_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            )
+
+        elif mode == "segments":
+            # Custom segment colors
+            if not bulb.supports_extended_custom_effects:
+                raise ValueError(
+                    f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
+                    "does not support custom segment colors. "
+                    "This feature is only available on 0xB6 devices."
+                )
+            buf_in(f"Setting custom segment colors: {len(custom['colors'])} segments")
+            await bulb.async_set_custom_segment_colors(custom["colors"])
 
     elif options.preset is not None:
         buf_in(
             f"Setting preset pattern: {PresetPattern.valtostr(options.preset[0])}, Speed={options.preset[1]}%"
         )
         await bulb.async_set_preset_pattern(options.preset[0], options.preset[1])
-
-    elif options.extended is not None:
-        if not bulb.supports_extended_custom_effects:
-            raise ValueError(
-                f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
-                "does not support extended custom effects. "
-                "This feature is only available on 0xB6 devices."
-            )
-        pattern_id, speed, density, colors, direction, option = options.extended
-        # Get pattern name for display
-        try:
-            pattern_name = (
-                ExtendedCustomEffectPattern(pattern_id).name.lower().replace("_", " ")
-            )
-        except ValueError:
-            pattern_name = f"pattern {pattern_id}"
-        dir_name = (
-            "L->R"
-            if direction == ExtendedCustomEffectDirection.LEFT_TO_RIGHT
-            else "R->L"
-        )
-        buf_in(
-            f"Setting extended effect: {pattern_name}, "
-            f"Speed={speed}%, Density={density}%, Direction={dir_name}, "
-            f"Colors={colors}"
-        )
-        await bulb.async_set_extended_custom_effect(
-            pattern_id, colors, speed, density, direction, option
-        )
-
-    elif options.segments is not None:
-        if not bulb.supports_extended_custom_effects:
-            raise ValueError(
-                f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
-                "does not support custom segment colors. "
-                "This feature is only available on 0xB6 devices."
-            )
-        buf_in(f"Setting custom segment colors: {len(options.segments)} segments")
-        await bulb.async_set_custom_segment_colors(options.segments)
 
     if options.on:
         buf_in(f"Turning on bulb at {bulb.ipaddr}")
@@ -1190,23 +1187,18 @@ async def _async_run_commands(
 
         if is_extended:
             # Create a minimal parser for error handling
-            from optparse import OptionParser as OP
-
-            temp_parser = OP()
+            temp_parser = OptionParser()
             ext_timer = processSetTimerArgsExtended(temp_parser, options.settimer)
             buf_in(f"New Timer ---- #{num}: {ext_timer}")
             await bulb.async_set_timer(ext_timer)
         else:
-            from optparse import OptionParser as OP
-            from typing import cast
-
-            temp_parser = OP()
+            temp_parser = OptionParser()
             std_timer = processSetTimerArgs(temp_parser, options.settimer)
             buf_in(f"New Timer ---- #{num}: {std_timer}")
             if std_timer.isExpired():
                 buf_in("[timer is already expired, will be deactivated]")
             timers_result = await bulb.async_get_timers()
-            timers_list = cast(list[LedTimer], timers_result) if timers_result else []
+            timers_list = cast("list[LedTimer]", timers_result) if timers_result else []
             if len(timers_list) < num:
                 # Extend list if needed
                 timers_list.extend([LedTimer() for _ in range(num - len(timers_list))])

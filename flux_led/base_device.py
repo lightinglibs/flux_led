@@ -674,6 +674,13 @@ class LEDENETDevice:
         # Devices with extended custom effects use different pattern names
         if self.supports_extended_custom_effects and pattern_code == 0x25:
             return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
+        # For 0xB6 segment mode: preset_pattern=0x24 and mode=0x00
+        if (
+            self.supports_extended_custom_effects
+            and pattern_code == 0x24
+            and mode == 0x00
+        ):
+            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)  # Returns "Segments"
         if protocol in OLD_EFFECTS_PROTOCOLS:
             effect_id = (pattern_code << 8) + mode - 99
             return ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.get(effect_id)

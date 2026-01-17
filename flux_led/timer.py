@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
 
 from .const import (
-    ExtendedCustomEffectPattern,
     TIMER_ACTION_COLOR,
     TIMER_ACTION_OFF,
     TIMER_ACTION_ON,
@@ -13,12 +11,13 @@ from .const import (
     TIMER_ACTION_SCENE_SEGMENTS,
     TIMER_EFFECT_GRADIENT,
     TIMER_EFFECT_SEGMENTS,
+    ExtendedCustomEffectPattern,
 )
-
-# Type alias for HSV color tuple (hue 0-180, saturation 0-100, value 0-100)
-HSVColor = Tuple[int, int, int]
 from .pattern import PresetPattern
 from .utils import utils
+
+# Type alias for HSV color tuple (hue 0-180, saturation 0-100, value 0-100)
+HSVColor = tuple[int, int, int]
 
 
 class BuiltInTimer:
@@ -388,7 +387,7 @@ class LedTimerExtended:
 
     Timer format (from packet analysis):
     - Simple ON/OFF: 21 bytes (slot + 20 bytes data)
-    - Scene timer: variable (slot + header + effect data + N×5 bytes colors)
+    - Scene timer: variable (slot + header + effect data + Nx5 bytes colors)
 
     Repeat mask format (different from LedTimer):
     - bit 0: reserved (always 0 for repeat mode)
@@ -415,17 +414,20 @@ class LedTimerExtended:
     action_type: int = TIMER_ACTION_OFF
 
     # For color action (0xa1) - HSV tuple (hue 0-180, saturation 0-100, value 0-100)
-    color_hsv: Optional[HSVColor] = None
+    color_hsv: HSVColor | None = None
 
     # For scene actions (0x29=gradient, 0x6b=segments)
-    pattern: Optional[ExtendedCustomEffectPattern] = None
+    pattern: ExtendedCustomEffectPattern | None = None
     speed: int = 50
-    colors: List[HSVColor] = field(default_factory=list)
+    colors: list[HSVColor] = field(default_factory=list)
 
     @property
     def is_scene(self) -> bool:
         """Return True if this is a scene timer."""
-        return self.action_type in (TIMER_ACTION_SCENE_GRADIENT, TIMER_ACTION_SCENE_SEGMENTS)
+        return self.action_type in (
+            TIMER_ACTION_SCENE_GRADIENT,
+            TIMER_ACTION_SCENE_SEGMENTS,
+        )
 
     @property
     def is_color(self) -> bool:
@@ -443,7 +445,7 @@ class LedTimerExtended:
         )
 
     @property
-    def repeat_days(self) -> List[str]:
+    def repeat_days(self) -> list[str]:
         """Return list of repeat day names."""
         days = []
         day_map = [
@@ -467,10 +469,9 @@ class LedTimerExtended:
 
         if self.is_scene:
             return self._to_bytes_scene()
-        elif self.is_color:
+        if self.is_color:
             return self._to_bytes_color()
-        else:
-            return self._to_bytes_simple()
+        return self._to_bytes_simple()
 
     def _to_bytes_simple(self) -> bytes:
         """Serialize simple ON/OFF timer."""
@@ -508,12 +509,24 @@ class LedTimerExtended:
 
         if is_gradient:
             # Gradient header (14 bytes + num_colors)
-            data.extend([
-                0x00, 100, pattern_id,  # sub-cmd, brightness, pattern
-                0x00, 0x01, self.speed, 0x50,  # option, direction, speed, transition
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00,  # padding
-                len(self.colors),
-            ])
+            data.extend(
+                [
+                    0x00,
+                    100,
+                    pattern_id,  # sub-cmd, brightness, pattern
+                    0x00,
+                    0x01,
+                    self.speed,
+                    0x50,  # option, direction, speed, transition
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x00,  # padding
+                    len(self.colors),
+                ]
+            )
         else:
             # Segments header (4 bytes + num_colors)
             data.extend([0x00, 0x00, 0x00, 0x00, len(self.colors)])
@@ -523,7 +536,7 @@ class LedTimerExtended:
         return bytes(data)
 
     @classmethod
-    def from_bytes(cls, data: bytes, offset: int = 0) -> Tuple["LedTimerExtended", int]:
+    def from_bytes(cls, data: bytes, offset: int = 0) -> tuple[LedTimerExtended, int]:
         """Parse timer from response bytes. Returns (timer, bytes_consumed)."""
         if offset + 7 > len(data):
             slot = data[offset] if offset < len(data) else 1
@@ -540,7 +553,10 @@ class LedTimerExtended:
             return cls(slot=slot, active=False), 7
 
         timer = cls(
-            slot=slot, active=True, hour=hour, minute=minute,
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
             repeat_mask=data[offset + 5],
         )
 
@@ -551,7 +567,11 @@ class LedTimerExtended:
             if offset + 11 <= len(data):
                 timer.action_type = data[offset + 10]
                 if timer.action_type == TIMER_ACTION_COLOR and offset + 14 <= len(data):
-                    timer.color_hsv = (data[offset + 11], data[offset + 12], data[offset + 13])
+                    timer.color_hsv = (
+                        data[offset + 11],
+                        data[offset + 12],
+                        data[offset + 13],
+                    )
             return timer, min(21, len(data) - offset)
 
         # Scene timer - look for e1 marker
@@ -560,7 +580,9 @@ class LedTimerExtended:
             is_gradient = effect_type == TIMER_EFFECT_GRADIENT
 
             timer.action_type = (
-                TIMER_ACTION_SCENE_GRADIENT if is_gradient else TIMER_ACTION_SCENE_SEGMENTS
+                TIMER_ACTION_SCENE_GRADIENT
+                if is_gradient
+                else TIMER_ACTION_SCENE_SEGMENTS
             )
 
             if is_gradient:
@@ -586,7 +608,9 @@ class LedTimerExtended:
                     break
                 timer.colors.append((data[c_off], data[c_off + 1], data[c_off + 2]))
 
-            return timer, min((color_start - offset) + num_colors * 5, len(data) - offset)
+            return timer, min(
+                (color_start - offset) + num_colors * 5, len(data) - offset
+            )
 
         return timer, min(21, len(data) - offset)
 
@@ -607,7 +631,11 @@ class LedTimerExtended:
             h, s, v = self.color_hsv
             action_str = f"Color (H:{h} S:{s} V:{v})"
         elif self.action_type == TIMER_ACTION_SCENE_GRADIENT:
-            name = self.pattern.name.replace("_", " ").title() if self.pattern else "Unknown"
+            name = (
+                self.pattern.name.replace("_", " ").title()
+                if self.pattern
+                else "Unknown"
+            )
             action_str = f"Scene: {name} ({len(self.colors)} colors)"
         elif self.action_type == TIMER_ACTION_SCENE_SEGMENTS:
             action_str = f"Colorful ({len(self.colors)} colors)"
