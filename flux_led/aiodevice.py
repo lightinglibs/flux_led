@@ -45,11 +45,12 @@ from .protocol import (
     ProtocolLEDENET8Byte,
     ProtocolLEDENETAddressableA3,
     ProtocolLEDENETAddressableChristmas,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETOriginal,
     RemoteConfig,
 )
 from .scanner import FluxLEDDiscovery
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import color_temp_to_white_levels, rgbw_brightness, rgbww_brightness
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         self._get_time_future: asyncio.Future[bool] | None = None
         self._get_timers_lock: asyncio.Lock = asyncio.Lock()
         self._get_timers_future: asyncio.Future[bool] | None = None
-        self._timers: list[LedTimer] | None = None
+        self._timers: list[LedTimer] | list[LedTimerExtended] | None = None
         self._power_restore_future: asyncio.Future[bool] = loop.create_future()
         self._device_config_lock: asyncio.Lock = asyncio.Lock()
         self._device_config_future: asyncio.Future[bool] = loop.create_future()
@@ -421,6 +422,47 @@ class AIOWifiLedBulb(LEDENETDevice):
             self._generate_custom_patterm(rgb_list, speed, transition_type)
         )
 
+    async def async_set_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> None:
+        """Set an extended custom effect on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            pattern_id: Pattern ID (1-24 or 101-102). See ExtendedCustomEffectPattern.
+            colors: List of 1-8 RGB color tuples
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: Animation direction (0x01=L->R, 0x02=R->L)
+            option: Pattern-specific option (default 0)
+        """
+        await self._async_send_msg(
+            self._generate_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            )
+        )
+
+    async def async_set_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> None:
+        """Set custom colors for each segment on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        Sets static HSV colors for each of 20 segments on the light strip.
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        await self._async_send_msg(self._generate_custom_segment_colors(segments))
+
     async def async_set_effect(
         self, effect: str, speed: int, brightness: int = 100
     ) -> None:
@@ -634,7 +676,7 @@ class AIOWifiLedBulb(LEDENETDevice):
                 return None
             return self._last_time
 
-    async def async_get_timers(self) -> list[LedTimer] | None:
+    async def async_get_timers(self) -> list[LedTimer] | list[LedTimerExtended] | None:
         """Get the timers."""
         assert self._protocol is not None
         if isinstance(self._protocol, ProtocolLEDENETOriginal):
@@ -651,10 +693,24 @@ class AIOWifiLedBulb(LEDENETDevice):
                 return None
             return self._timers
 
-    async def async_set_timers(self, timer_list: list[LedTimer]) -> None:
+    async def async_set_timers(
+        self, timer_list: list[LedTimer] | list[LedTimerExtended]
+    ) -> None:
         """Set the timers."""
         assert self._protocol is not None
-        await self._async_send_msg(self._protocol.construct_set_timers(timer_list))
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            # 0xB6 devices set timers one at a time
+            commands = self._protocol.construct_set_timers(timer_list)  # type: ignore[arg-type]
+            for cmd in commands:
+                await self._async_send_msg(cmd)
+        else:
+            await self._async_send_msg(self._protocol.construct_set_timers(timer_list))  # type: ignore[arg-type]
+
+    async def async_set_timer(self, timer: LedTimerExtended) -> None:
+        """Set a single timer (for 0xB6 devices)."""
+        assert self._protocol is not None
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            await self._async_send_msg(self._protocol.construct_set_timer(timer))
 
     async def async_set_time(self, time: datetime | None = None) -> None:
         """Set the current time."""
@@ -706,7 +762,8 @@ class AIOWifiLedBulb(LEDENETDevice):
                 )
             self._async_process_message(msg)
 
-    def _async_process_state_response(self, msg: bytes) -> bool:
+    def _resolve_protocol_determination(self, msg: bytes) -> None:
+        """Resolve pending protocol determination if applicable."""
         if (
             self._determine_protocol_future
             and not self._determine_protocol_future.done()
@@ -714,7 +771,6 @@ class AIOWifiLedBulb(LEDENETDevice):
             assert self._protocol is not None
             self._set_protocol_from_msg(msg, self._protocol.name)
             self._determine_protocol_future.set_result(True)
-        return self.process_state_response(msg)
 
     def _async_process_message(self, msg: bytes) -> None:
         """Process a full message (maybe reassembled)."""
@@ -725,13 +781,22 @@ class AIOWifiLedBulb(LEDENETDevice):
         if self._protocol.is_valid_outer_message(msg):
             msg = self._protocol.extract_inner_message(msg)
 
-        if self._protocol.is_valid_state_response(msg):
-            self._last_message["state"] = msg
-            self._async_process_state_response(msg)
-            self._process_state_futures()
-        elif self._protocol.is_valid_extended_state_response(msg):
+        # Check for extended state BEFORE regular state to properly handle 0xEA responses
+        # Extended state format (0xEA 0x81) was introduced in PR #428 for 0x35 v10 devices
+        # Some devices (like 0xB6) ONLY respond with extended state format, so we check it first
+        if self._protocol.is_valid_extended_state_response(msg):
             self._last_message["extended_state"] = msg
+            self._resolve_protocol_determination(msg)
             self.process_extended_state_response(msg)
+            # Extended state includes both state and power state information
+            # so we need to resolve both types of futures
+            self._process_state_futures()
+            self._process_power_futures()
+        elif self._protocol.is_valid_state_response(msg):
+            self._last_message["state"] = msg
+            self._resolve_protocol_determination(msg)
+            self.process_state_response(msg)
+            self._process_state_futures()
         elif self._protocol.is_valid_power_state_response(msg):
             self._last_message["power_state"] = msg
             self.process_power_state_response(msg)

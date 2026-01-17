@@ -276,7 +276,12 @@ class WifiLedBulb(LEDENETDevice):
                 # cannot process, recycle the connection
                 self.close()
                 continue
-            full_msg = rx + self._read_msg(protocol.state_response_length - read_bytes)
+            # Check for extended state format (0xEA 0x81) which needs 21 bytes total
+            if rx[0] == 0xEA and rx[1] == 0x81:
+                additional_bytes = 19  # 21 - 2 bytes already read
+            else:
+                additional_bytes = protocol.state_response_length - read_bytes
+            full_msg = rx + self._read_msg(additional_bytes)
             if not protocol.is_valid_state_response(full_msg):
                 self.close()
                 continue
@@ -374,6 +379,59 @@ class WifiLedBulb(LEDENETDevice):
         """Set a custom pattern on the device."""
         self._send_and_read_with_retry(
             self._generate_custom_patterm(rgb_list, speed, transition_type),
+            0,
+            retry=retry,
+        )
+
+    def setExtendedCustomEffect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set an extended custom effect on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            pattern_id: Pattern ID (1-24 or 101-102). See ExtendedCustomEffectPattern.
+            colors: List of 1-8 RGB color tuples, e.g., [(255, 0, 0), (0, 255, 0)]
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: Animation direction. See ExtendedCustomEffectDirection.
+                0x01 = Left to Right (default)
+                0x02 = Right to Left
+            option: Pattern-specific option (default 0)
+            retry: Number of retries on failure
+        """
+        self._send_and_read_with_retry(
+            self._generate_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            ),
+            0,
+            retry=retry,
+        )
+
+    def setCustomSegmentColors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set custom colors for each segment on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        Sets static HSV colors for each of 20 segments on the light strip.
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+            retry: Number of retries on failure
+        """
+        self._send_and_read_with_retry(
+            self._generate_custom_segment_colors(segments),
             0,
             retry=retry,
         )
