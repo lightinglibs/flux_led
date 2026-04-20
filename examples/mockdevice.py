@@ -103,7 +103,7 @@ class MagichomeServerProtocol(asyncio.Protocol):
         self.peername = transport.get_extra_info("peername")
         self.transport = transport
 
-    def send(self, data: bytes, random_byte: Optional[None]) -> None:
+    def send(self, data: bytes, random_byte: None) -> None:
         """Trigger on data."""
         if random_byte is not None:
             msg = self.construct_wrapped_message(data, random_byte)
