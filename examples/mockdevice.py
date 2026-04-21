@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import socket
-from typing import Optional
 
 from flux_led.aioscanner import AIOBulbScanner
 from flux_led.protocol import OUTER_MESSAGE_WRAPPER
@@ -38,7 +37,7 @@ class MagicHomeDiscoveryProtocol(asyncio.Protocol):
     def __init__(self) -> None:
         self.loop = asyncio.get_running_loop()
         self.local_ip = get_local_ip()
-        self.transport: Optional[asyncio.BaseTransport] = None
+        self.transport: asyncio.BaseTransport | None = None
 
     def connection_made(self, transport):
         self.transport = transport
@@ -76,11 +75,11 @@ class MagicHomeDiscoveryProtocol(asyncio.Protocol):
                 f"+ok={model_str}_{minor_version_str}_20210428_ZG-BL\r".encode(), addr
             )
 
-    def error_received(self, ex: Optional[Exception]) -> None:
+    def error_received(self, ex: Exception | None) -> None:
         """Handle error."""
         _LOGGER.debug("LEDENETDiscovery error: %s", ex)
 
-    def connection_lost(self, ex: Optional[Exception]) -> None:
+    def connection_lost(self, ex: Exception | None) -> None:
         """The connection is lost."""
 
 
@@ -91,7 +90,7 @@ class MagichomeServerProtocol(asyncio.Protocol):
         self.loop = asyncio.get_running_loop()
         self.handler = None
         self.peername = None
-        self.transport: Optional[asyncio.BaseTransport] = None
+        self.transport: asyncio.BaseTransport | None = None
 
     def connection_lost(self, exc: Exception) -> None:
         """Handle connection lost."""

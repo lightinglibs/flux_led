@@ -30,7 +30,6 @@ dev_requirements = [
 
 requirements = [
     "webcolors",
-    'typing_extensions;python_version<"3.8"',
     "async_timeout>=3.0.0",
 ]
 
@@ -70,9 +69,6 @@ setup(
         + "GNU Lesser General Public License v3 or later (LGPLv3+)",
         "Operating System :: OS Independent",
         "Programming Language :: Python",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
@@ -81,7 +77,7 @@ setup(
         "Topic :: Home Automation",
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     setup_requires=setup_requirements,
     tests_require=test_requirements,
     extras_require=extra_requirements,
