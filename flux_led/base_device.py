@@ -7,7 +7,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import asdict, is_dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 from .const import (  # imported for back compat, remove once Home Assistant no longer uses
     ADDRESSABLE_STATE_CHANGE_LATENCY,
@@ -135,25 +135,25 @@ PROTOCOL_PROBES_LEGACY: tuple[
     type[ProtocolLEDENETOriginal], type[ProtocolLEDENET8Byte]
 ] = (ProtocolLEDENETOriginal, ProtocolLEDENET8Byte)
 
-PROTOCOL_TYPES = Union[
-    ProtocolLEDENET8Byte,
-    ProtocolLEDENET8ByteAutoOn,
-    ProtocolLEDENET8ByteDimmableEffects,
-    ProtocolLEDENET9Byte,
-    ProtocolLEDENET9ByteAutoOn,
-    ProtocolLEDENET9ByteDimmableEffects,
-    ProtocolLEDENET25Byte,
-    ProtocolLEDENETAddressableA1,
-    ProtocolLEDENETAddressableA2,
-    ProtocolLEDENETAddressableA3,
-    ProtocolLEDENETOriginal,
-    ProtocolLEDENETOriginalCCT,
-    ProtocolLEDENETOriginalRGBW,
-    ProtocolLEDENETCCT,
-    ProtocolLEDENETCCTWrapped,
-    ProtocolLEDENETSocket,
-    ProtocolLEDENETAddressableChristmas,
-]
+PROTOCOL_TYPES = (
+    ProtocolLEDENET8Byte
+    | ProtocolLEDENET8ByteAutoOn
+    | ProtocolLEDENET8ByteDimmableEffects
+    | ProtocolLEDENET9Byte
+    | ProtocolLEDENET9ByteAutoOn
+    | ProtocolLEDENET9ByteDimmableEffects
+    | ProtocolLEDENET25Byte
+    | ProtocolLEDENETAddressableA1
+    | ProtocolLEDENETAddressableA2
+    | ProtocolLEDENETAddressableA3
+    | ProtocolLEDENETOriginal
+    | ProtocolLEDENETOriginalCCT
+    | ProtocolLEDENETOriginalRGBW
+    | ProtocolLEDENETCCT
+    | ProtocolLEDENETCCTWrapped
+    | ProtocolLEDENETSocket
+    | ProtocolLEDENETAddressableChristmas
+)
 
 ADDRESSABLE_PROTOCOLS = {
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
