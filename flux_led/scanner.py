@@ -6,9 +6,7 @@ import socket
 import time
 from datetime import date
 from typing import (
-    Optional,
     TypedDict,  # pylint: disable=no-name-in-module
-    Union,
 )
 
 from .const import (
@@ -36,19 +34,19 @@ class FluxLEDDiscovery(TypedDict):
     """A flux led device."""
 
     ipaddr: str
-    id: Optional[str]  # aka mac
-    model: Optional[str]
-    model_num: Optional[int]
-    version_num: Optional[int]
-    firmware_date: Optional[date]
-    model_info: Optional[str]  # contains if IR (and maybe BL) if the device supports IR
-    model_description: Optional[str]
-    remote_access_enabled: Optional[bool]
-    remote_access_host: Optional[str]  # the remote access host
-    remote_access_port: Optional[int]  # the remote access port
+    id: str | None  # aka mac
+    model: str | None
+    model_num: int | None
+    version_num: int | None
+    firmware_date: date | None
+    model_info: str | None  # contains if IR (and maybe BL) if the device supports IR
+    model_description: str | None
+    remote_access_enabled: bool | None
+    remote_access_host: str | None  # the remote access host
+    remote_access_port: int | None  # the remote access port
 
 
-def is_legacy_device(discovery: Optional[FluxLEDDiscovery]) -> bool:
+def is_legacy_device(discovery: FluxLEDDiscovery | None) -> bool:
     """Check if a discovery is a legacy device."""
     if not discovery:
         return False
@@ -192,16 +190,16 @@ class BulbScanner:
     def _create_socket(self) -> socket.socket:
         return create_udp_socket(self.DISCOVERY_PORT)
 
-    def _destination_from_address(self, address: Optional[str]) -> tuple[str, int]:
+    def _destination_from_address(self, address: str | None) -> tuple[str, int]:
         if address is None:
             address = self.BROADCAST_ADDRESS
         return (address, self.DISCOVERY_PORT)
 
     def _process_response(
         self,
-        data: Optional[bytes],
+        data: bytes | None,
         from_address: tuple[str, int],
-        address: Optional[str],
+        address: str | None,
         response_list: dict[str, FluxLEDDiscovery],
     ) -> bool:
         """Process a response.
@@ -282,7 +280,7 @@ class BulbScanner:
 
     def _send_message(
         self,
-        sender: Union[socket.socket, asyncio.DatagramTransport],
+        sender: socket.socket | asyncio.DatagramTransport,
         destination: tuple[str, int],
         message: bytes,
     ) -> None:
@@ -292,7 +290,7 @@ class BulbScanner:
     def _send_messages(
         self,
         messages: list[bytes],
-        sender: Union[socket.socket, asyncio.DatagramTransport],
+        sender: socket.socket | asyncio.DatagramTransport,
         destination: tuple[str, int],
     ) -> None:
         """Send messages with a short delay between them."""
@@ -307,7 +305,7 @@ class BulbScanner:
         return [self.DISCOVER_MESSAGE, self.VERSION_MESSAGE, self.REMOTE_ACCESS_MESSAGE]
 
     def scan(
-        self, timeout: int = 10, address: Optional[str] = None
+        self, timeout: int = 10, address: str | None = None
     ) -> list[FluxLEDDiscovery]:
         """Scan for bulbs.
 
@@ -343,7 +341,7 @@ class BulbScanner:
                 try:
                     data, addr = sock.recvfrom(self.RESPONSE_SIZE)
                     _LOGGER.debug("discover: %s <= %s", addr, data)
-                except socket.timeout:
+                except TimeoutError:
                     continue
 
                 if self._process_response(data, addr, address, self._discoveries):

@@ -4,8 +4,9 @@ import asyncio
 import logging
 import time
 from asyncio import ALL_COMPLETED, FIRST_COMPLETED
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from .aioprotocol import AIOLEDENETProtocol
 from .aioscanner import AIOBulbScanner
