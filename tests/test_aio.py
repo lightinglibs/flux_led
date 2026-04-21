@@ -7,9 +7,8 @@ import datetime
 import json
 import logging
 import time
-from unittest.mock import AsyncMock, MagicMock, call, patch
-
 from optparse import OptionParser
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
