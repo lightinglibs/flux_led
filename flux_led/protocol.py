@@ -27,7 +27,7 @@ from .const import (
     LevelWriteModeData,
     MultiColorEffects,
 )
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import (
     scaled_color_temp_to_white_levels,
     utils,
@@ -97,6 +97,7 @@ PROTOCOL_LEDENET_CCT = "LEDENET_CCT"
 PROTOCOL_LEDENET_CCT_WRAPPED = "LEDENET_CCT_WRAPPED"
 PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS = "LEDENET_CHRISTMAS"
 PROTOCOL_LEDENET_25BYTE = "LEDENET_25_BYTE"
+PROTOCOL_LEDENET_EXTENDED_CUSTOM = "LEDENET_EXTENDED_CUSTOM"
 
 TRANSITION_BYTES = {
     TRANSITION_JUMP: 0x3B,
@@ -109,6 +110,7 @@ LEDNET_MUSIC_MODE_RESPONSE_LEN = 13  # 72 01 26 01 00 00 00 00 00 00 64 64 62
 LEDENET_POWER_RESTORE_RESPONSE_LEN = 7
 LEDENET_ORIGINAL_STATE_RESPONSE_LEN = 11
 LEDENET_STATE_RESPONSE_LEN = 14
+LEDENET_EXTENDED_STATE_RESPONSE_LEN = 21
 LEDENET_POWER_RESPONSE_LEN = 4
 LEDENET_ADDRESSABLE_STATE_RESPONSE_LEN = 25
 LEDENET_A1_DEVICE_CONFIG_RESPONSE_LEN = 12
@@ -119,6 +121,15 @@ LEDENET_TIMERS_8BYTE_RESPONSE_LEN = 88
 LEDENET_TIMERS_9BYTE_RESPONSE_LEN = 94
 LEDENET_TIMERS_SOCKET_RESPONSE_LEN = 100
 
+# Byte positions for parsing state messages
+# Standard state format (0x81): model at position 1, version at position 10
+LEDENET_STATE_MODEL_POS = 1
+LEDENET_STATE_VERSION_POS = 10
+# Extended state format (0xEA 0x81): model at position 4, version at position 5
+# Extended state format was introduced in PR #428 for devices like 0x35 v10 and 0xB6
+LEDENET_EXTENDED_STATE_MODEL_POS = 4
+LEDENET_EXTENDED_STATE_VERSION_POS = 5
+
 MSG_ORIGINAL_POWER_STATE = "original_power_state"
 MSG_ORIGINAL_STATE = "original_state"
 MSG_POWER_RESTORE_STATE = "power_restore_state"
@@ -126,6 +137,7 @@ MSG_POWER_STATE = "power_state"
 MSG_STATE = "state"
 MSG_TIME = "time"
 MSG_TIMERS = "timers"
+MSG_TIMERS_EXTENDED = "timers_extended"
 MSG_MUSIC_MODE_STATE = "music_mode_state"
 MSG_ADDRESSABLE_STATE = "addressable_state"
 MSG_DEVICE_CONFIG = "device_config"
@@ -161,6 +173,7 @@ MSG_UNIQUE_START = {
     (0x63,): MSG_A1_DEVICE_CONFIG,
     (0x72,): MSG_MUSIC_MODE_STATE,
     (0x2B,): MSG_REMOTE_CONFIG,
+    (0xE0, 0x06): MSG_TIMERS_EXTENDED,  # 0xB6 device timer response
 }
 
 MSG_LENGTHS = {
@@ -1021,13 +1034,34 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a message is the start of a state response."""
         return _message_type_from_start_of_msg(data) == MSG_POWER_STATE
 
+    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+        """Check if this is an extended state response (0xEA 0x81 format).
+
+        Some devices (like 0xB6) only respond with extended state format.
+        This allows probing to recognize these responses.
+        """
+        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
+
     def is_valid_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
+        # Check for extended state format (0xEA 0x81) first
+        if self.is_valid_extended_state_response(raw_state):
+            return True
+        # Check for standard state format (0x81)
         if len(raw_state) != self.state_response_length:
             return False
         if raw_state[0] != 129:
             return False
         return self.is_checksum_correct(raw_state)
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert an extended state response to a standard state response.
+
+        This is overridden by ProtocolLEDENET25Byte with the actual conversion logic.
+        Default implementation returns raw_state unchanged for protocols that don't
+        use extended state.
+        """
+        return raw_state
 
     def construct_state_change(self, turn_on: int) -> bytearray:
         """
@@ -1591,6 +1625,472 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                 version=0x02,
             )
         ]
+
+
+class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
+    """Protocol for devices with extended state format (0xEA 0x81) and custom effects.
+
+    Used by devices like Surplife Outdoor Permanent Lighting (0xB6) with RGBW LEDs.
+    This protocol:
+    - ONLY responds with extended state format (0xEA 0x81, 20+ bytes)
+    - Supports extended custom effect commands (0xE1 0x21, 0xE1 0x22)
+    - Uses HSV+W color format: [H/2, S, V, 0x00, W] (5 bytes per color)
+    - Parent's 0xE0 command works for RGB but NOT for white/CCT
+    - Uses 0xE1 0x21 STATIC_FILL (0x66) for solid RGBW colors
+
+    Extended state response format (0xEA 0x81, 21+ bytes):
+      pos  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 ...
+          EA 81 01 00 MN VN PW PP MD SP ?? HH SS VV WT WB ...
+                      |  |  |  |  |  |     |  |  |  |  |
+                      |  |  |  |  |  |     |  |  |  |  white brightness (0-100)
+                      |  |  |  |  |  |     |  |  |  white temp (0-100, 0xFF=off)
+                      |  |  |  |  |  |     |  |  value (0-100)
+                      |  |  |  |  |  |     |  saturation (0-100)
+                      |  |  |  |  |  |     hue/2 (0-180)
+                      |  |  |  |  |  speed (0-100)
+                      |  |  |  |  mode/pattern ID (when PP=0x25)
+                      |  |  |  preset_pattern (0x25=custom effect)
+                      |  |  power state (0x23=ON, 0x24=OFF)
+                      |  version number
+                      model number (0xB6)
+
+    RGBW color format in 0xE1 0x21 command:
+      [H/2, S, V, 0x00, W]
+       |    |  |   |    |
+       |    |  |   |    white LED brightness (0-255)
+       |    |  |   unused in 0xB6 (always 0x00)
+       |    |  value/brightness (0-100)
+       |    saturation (0-100)
+       hue/2 (0-180, divide actual hue by 2)
+    """
+
+    @property
+    def name(self) -> str:
+        """The name of the protocol."""
+        return PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    @property
+    def state_response_length(self) -> int:
+        """The length of the query response.
+
+        Extended state format is 21 bytes (0xEA 0x81 + 19 bytes).
+        """
+        return LEDENET_EXTENDED_STATE_RESPONSE_LEN
+
+    def is_valid_state_response(self, raw_state: bytes) -> bool:
+        """Check if a state response is valid.
+
+        This protocol ONLY accepts extended state format (0xEA 0x81).
+        """
+        return self.is_valid_extended_state_response(raw_state)
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert extended state to standard state format.
+
+        For this protocol, extended state mode (position 8) always contains
+        the custom effect pattern ID when preset_pattern is 0x25.
+        No model lookup needed since this protocol always supports extended effects.
+        """
+        if len(raw_state) < 20:
+            return b""
+
+        model_num = raw_state[4]
+        version_number = raw_state[5]
+        power_state = raw_state[6]
+        preset_pattern = raw_state[7]
+        speed = raw_state[9]
+
+        hue = raw_state[11]
+        saturation = raw_state[12]
+        value = raw_state[13]
+
+        white_temp = raw_state[14]
+        white_brightness = raw_state[15]
+
+        if white_temp > 100 or white_brightness == 0:
+            cool_white = 0
+            warm_white = 0
+        else:
+            levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
+            cool_white = levels.cool_white
+            warm_white = levels.warm_white
+
+        # Convert HSV to RGB
+        h = (hue * 2) / 360
+        s = saturation / 100
+        v = value / 100
+        r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
+        red = min(int(max(0, r_f) * 255), 255)
+        green = min(int(max(0, g_f) * 255), 255)
+        blue = min(int(max(0, b_f) * 255), 255)
+
+        # For this protocol, mode always contains the effect pattern ID
+        # when in custom pattern mode (preset_pattern == 0x25)
+        mode = raw_state[8] if preset_pattern == 0x25 else 0
+        color_mode = 0
+        check_sum = 0
+
+        return bytes(
+            (
+                raw_state[1],  # Head (0x81)
+                model_num,
+                power_state,
+                preset_pattern,
+                mode,
+                speed,
+                red,
+                green,
+                blue,
+                warm_white,
+                version_number,
+                cool_white,
+                color_mode,
+                check_sum,
+            )
+        )
+
+    def named_raw_state(self, raw_state: bytes) -> LEDENETRawState:
+        """Convert raw_state to a namedtuple.
+
+        For extended state format (0xEA 0x81), convert to standard 14-byte format first.
+        If already in standard format (14 bytes starting with 0x81), use directly.
+        """
+        # Check if this is extended state format (0xEA 0x81)
+        if len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81:
+            converted_state = self.extended_state_to_state(raw_state)
+            return LEDENETRawState(*converted_state)
+        # Already standard 14-byte format
+        return LEDENETRawState(*raw_state)
+
+    def _rgb_to_hsv_bytes_rgbw(
+        self, r: int, g: int, b: int, white: int = 0
+    ) -> list[int]:
+        """Convert RGBW (0-255) to 5-byte HSVW format for extended effect commands.
+
+        Output format:
+          [H/2, S, V, 0x00, W]
+           0    1  2   3    4
+           |    |  |   |    white LED brightness (0-255)
+           |    |  |   unused (always 0x00)
+           |    |  value/brightness (0-100)
+           |    saturation (0-100)
+           hue divided by 2 (0-180)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+            white: White LED brightness (0-255)
+
+        Returns:
+            5-byte list [H/2, S, V, 0x00, W]
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, white]
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode | int,
+    ) -> list[bytearray]:
+        """Construct level change using 0xE1 0x21 STATIC_FILL command.
+
+        The parent's 0xE0 wrapped command works for RGB but not for CCT/white.
+        This override uses extended custom effect command (0xE1 0x21) with
+        STATIC_FILL pattern (0x66) which supports both RGB and white.
+
+        Inner message format (before wrapping):
+          pos  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
+              E1 21 00 64 66 00 01 32 32 00 00 00 00 00 00 01 HH SS VV 00 WW
+                        |  |  |  |  |  |                    |  |  |  |  |  |
+                        |  |  |  |  |  |                    |  |  |  |  |  white (0-255)
+                        |  |  |  |  |  |                    |  |  |  |  unused
+                        |  |  |  |  |  |                    |  |  |  value (0-100)
+                        |  |  |  |  |  |                    |  |  saturation (0-100)
+                        |  |  |  |  |  |                    |  hue/2 (0-180)
+                        |  |  |  |  |  |                    color count (1)
+                        |  |  |  |  |  reserved (6 bytes, all 0x00)
+                        |  |  |  |  speed (0x32 = 50)
+                        |  |  |  density (0x32 = 50)
+                        |  |  direction (0x01 = L->R)
+                        |  option (0x00 = default)
+                        pattern ID (0x66 = STATIC_FILL)
+
+        Note: Device has single white LED, so warm_white and cool_white
+        are combined into one brightness value.
+        """
+        # STATIC_FILL pattern ID
+        STATIC_FILL = 0x66
+
+        r = red or 0
+        g = green or 0
+        b = blue or 0
+
+        # Combine warm and cool white into single white brightness
+        # (device only has one white LED)
+        w = min((warm_white or 0) + (cool_white or 0), 255)
+
+        # Build extended custom effect command with RGBW support
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                STATIC_FILL,  # Pattern ID
+                0x00,  # Option
+                0x01,  # Direction (L->R)
+                0x32,  # Density (50)
+                0x32,  # Speed (50)
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                0x01,  # Color count (1)
+            ]
+        )
+
+        # Add RGBW color as HSV with white in 5th byte
+        msg.extend(self._rgb_to_hsv_bytes_rgbw(r, g, b, w))
+
+        return [
+            self.construct_wrapped_message(
+                msg, inner_pre_constructed=True, version=0x02
+            )
+        ]
+
+    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
+        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
+
+        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, 0x00]
+
+    def construct_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Construct an extended custom effect command.
+
+        Protocol format:
+          0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
+         e1 21 00 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
+                    |  |  |  |  |                    |  colors (5 bytes each)
+                    |  |  |  |  |                    color count
+                    |  |  |  |  speed (0-100)
+                    |  |  |  density (0-100)
+                    |  |  direction (01=L->R, 02=R->L)
+                    |  option (00=default, 01=color change)
+                    pattern_id (1-24 or 101-102)
+
+        Args:
+            pattern_id: Pattern ID 1-24 or 101-102
+            colors: List of 1-8 RGB color tuples (0-255 per channel)
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: 0x01=L->R, 0x02=R->L (default L->R)
+            option: Pattern-specific option (default 0)
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Clamp values to valid range
+        speed = max(0, min(100, speed))
+        density = max(0, min(100, density))
+
+        # Convert Enum to value if needed
+        if hasattr(pattern_id, "value"):
+            pattern_id = pattern_id.value
+        if hasattr(option, "value"):
+            option = option.value
+        if hasattr(direction, "value"):
+            direction = direction.value
+
+        # Build inner message
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                pattern_id,
+                option,
+                direction,
+                density,
+                speed,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                len(colors),  # Color count
+            ]
+        )
+
+        # Add colors as HSV (5 bytes each)
+        for r, g, b in colors:
+            msg.extend(self._rgb_to_hsv_bytes(r, g, b))
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Construct a custom segment colors command (0xE1 0x22).
+
+        Sets static HSV colors for each of 20 segments on the light strip.
+        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
+
+        Protocol format:
+          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
+
+        Args:
+            segments: List of up to 20 segment colors. Each segment is either:
+                - None or (0, 0, 0) for off
+                - (R, G, B) tuple with values 0-255
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Build inner message: header + 20 segments
+        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+
+        for i in range(20):
+            segment = segments[i] if i < len(segments) else None
+            if segment and segment != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segment))
+            else:
+                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    # --- Timer Support for 0xB6 devices ---
+    # This protocol uses a different timer format than other protocols:
+    # - Query: e0 06 (wrapped)
+    # - Response: e0 06 + variable length slot data
+    # - Set: e0 05 SS f0 HH MM 00 RR ... (wrapped)
+
+    def construct_get_timers(self) -> bytearray:
+        """Construct a get timers request.
+
+        0xB6 devices use the wrapped e0 06 command for timer queries.
+        """
+        inner = bytearray([0xE0, 0x06])
+        return self.construct_wrapped_message(
+            inner, inner_pre_constructed=True, version=0x01
+        )
+
+    def construct_set_timer(self, timer: LedTimerExtended) -> bytearray:
+        """Construct a set timer command for a single timer.
+
+        0xB6 devices set timers one at a time using e0 05 SS ...
+
+        Args:
+            timer: The LedTimerExtended object to set
+
+        Returns:
+            Wrapped command bytearray
+        """
+        inner = bytearray([0xE0, 0x05, timer.slot])
+        inner.extend(timer.to_bytes())
+        return self.construct_wrapped_message(
+            inner, inner_pre_constructed=True, version=0x01
+        )
+
+    def construct_set_timers(  # type: ignore[override]
+        self, timer_list: list[LedTimerExtended]
+    ) -> list[bytearray]:
+        """Construct set timer commands for multiple timers.
+
+        0xB6 devices set timers one at a time, so this returns a list
+        of commands (one per timer).
+
+        Args:
+            timer_list: List of LedTimerExtended objects to set
+
+        Returns:
+            List of wrapped command bytearrays
+        """
+        return [self.construct_set_timer(timer) for timer in timer_list]
+
+    def is_valid_timers_response(self, msg: bytes) -> bool:
+        """Check if a message is a valid timers response.
+
+        0xB6 timer responses start with e0 06.
+        """
+        if len(msg) < 2:
+            return False
+        return msg[0] == 0xE0 and msg[1] == 0x06
+
+    def parse_get_timers(self, msg: bytes) -> list[LedTimerExtended]:  # type: ignore[override]
+        """Parse timer response into list of LedTimerExtended objects.
+
+        Response format:
+        - Empty: e0 06 (2 bytes)
+        - With timers: e0 06 [slot1] [slot2] ... [slot6]
+
+        Each slot is either:
+        - 7 bytes if empty/inactive
+        - 21 bytes if simple timer (ON/OFF/color)
+        - Variable (48+) bytes if scene timer
+        """
+        if len(msg) <= 2:
+            # Empty response or just header - no timers configured
+            return []
+
+        timers: list[LedTimerExtended] = []
+        offset = 2  # Skip e0 06 header
+
+        while offset < len(msg):
+            # Check if we have enough bytes for minimum slot (7 bytes)
+            if offset + 7 > len(msg):
+                break
+
+            timer, consumed = LedTimerExtended.from_bytes(msg, offset)
+            timers.append(timer)
+            offset += consumed
+
+        return timers
+
+    @property
+    def timer_count(self) -> int:
+        """Number of timer slots supported."""
+        return 6
+
+    def expected_timers_response_length(self, data: bytes) -> int:
+        """Calculate expected timer response length.
+
+        For 0xB6 devices, the timer response has variable length
+        based on the inner message length encoded in the wrapped message.
+        """
+        # Timer responses are wrapped, so we extract from the wrapper
+        if (
+            len(data) >= OUTER_MESSAGE_WRAPPER_START_LEN
+            and data[0] == OUTER_MESSAGE_FIRST_BYTE
+        ):
+            inner_msg_len = (data[8] << 8) + data[9]
+            return OUTER_MESSAGE_WRAPPER_START_LEN + inner_msg_len + CHECKSUM_LEN
+        # Fallback
+        return len(data)
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

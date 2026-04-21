@@ -30,6 +30,10 @@ from .protocol import (
     A2_PROTOCOL_TO_NUM,
     ADDRESSABLE_RGB_NUM_TO_WIRING,
     ADDRESSABLE_RGB_WIRING_TO_NUM,
+    LEDENET_EXTENDED_STATE_MODEL_POS,
+    LEDENET_EXTENDED_STATE_VERSION_POS,
+    LEDENET_STATE_MODEL_POS,
+    LEDENET_STATE_VERSION_POS,
     NEW_ADDRESSABLE_NUM_TO_OPERATING_MODE,
     NEW_ADDRESSABLE_NUM_TO_PROTOCOL,
     NEW_ADDRESSABLE_OPERATING_MODE_TO_NUM,
@@ -47,6 +51,7 @@ from .protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_CCT,
     PROTOCOL_LEDENET_CCT_WRAPPED,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_SOCKET,
@@ -83,6 +88,7 @@ MODEL_INFO_NAMES = {
     "ZG-LX": "",  # Seen on floor lamp, v2 addressable, and Single channel controller
     "ZG-LX-UART": "",  # Seen on UK xmas lights 0x33, fairy controller, and lytworx
     "ZG-BL-PWM": "",  # Seen on 40w Flood Light
+    "ZG-BL-UFO": "",  # Seen on Surplife outdoor permanent lighting 0xB6
     "ZG-ZW2": "",  # seen on 0x97 socket
     "ZGIR44": "44 Key IR",
     "IR_ZG": "IR",
@@ -343,6 +349,7 @@ class LEDENETModel:
     channel_map: dict[str, str]  # Used to remap channels
     microphone: bool
     device_config: LEDENETDeviceConfigurationOptions
+    supports_extended_custom_effects: bool = False
 
     def protocol_for_version_num(self, version_num: int) -> str:
         protocol = self.protocols[-1].protocol
@@ -637,6 +644,15 @@ HARDWARE = [
         remote_24g_controls=False,
         auto_on=False,
         dimmable_effects=False,
+    ),
+    LEDENETHardware(
+        model="AK001-ZJ21413",  # Surplife outdoor permanent LED lighting
+        chip=LEDENETChip.BL602,
+        remote_rf=False,
+        remote_24g=True,  # has remote access enabled
+        remote_24g_controls=False,
+        auto_on=True,
+        dimmable_effects=True,
     ),
 ]
 
@@ -1297,6 +1313,35 @@ MODELS = [
         device_config=NEW_ADDRESABLE_DEVICE_CONFIG,
     ),
     LEDENETModel(
+        model_num=0xB6,
+        models=["AK001-ZJ21413"],
+        description="Surplife Outdoor Permanent Lighting",
+        # NOTE: This device ONLY responds with extended state format (0xEA 0x81)
+        # introduced in PR #428, unlike 0x35 which can respond with both
+        # standard (0x81) and extended (0xEA 0x81) formats
+        #
+        # CUSTOM PATTERNS: This device supports 24 unique pattern types (wave,
+        # meteor, jump, strobe, comet, etc.) with customizable colors, speed, and
+        # density via ExtendedCustomEffectPattern and async_set_extended_custom_effect().
+        # The manufacturer's app shows 45 "scenes" (pre-configured colors) and 24
+        # "customizable patterns" (user-chosen colors), but they share the same
+        # pattern IDs - scenes are just preset color combinations of the patterns.
+        # Pattern IDs: 1-22 (animated), 101-102 (static). When active, preset_pattern
+        # byte = 0x25 (37) and byte 8 = actual pattern ID.
+        #
+        # STANDARD PRESET PATTERNS: NOT SUPPORTED by this device hardware. Standard
+        # preset pattern commands (0x61...) and custom effect commands (0x51...) do
+        # not work and will never work on this device.
+        always_writes_white_and_colors=False,
+        protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_EXTENDED_CUSTOM)],
+        # Device has single white LED (not separate warm/cool), so use RGB_W not RGB_CCT
+        mode_to_color_mode={0x01: COLOR_MODES_RGB_W, 0x17: COLOR_MODES_RGB_W},
+        color_modes=COLOR_MODES_RGB_W,
+        channel_map={},
+        microphone=True,
+        device_config=IMMUTABLE_DEVICE_CONFIG,
+    ),
+    LEDENETModel(
         model_num=0xD1,
         models=[],
         description="Digital Time Light",
@@ -1345,6 +1390,33 @@ MODELS = [
 ]
 
 MODEL_MAP: dict[int, LEDENETModel] = {model.model_num: model for model in MODELS}
+
+
+def extract_model_version_from_state(full_msg: bytes) -> tuple[int, int]:
+    """Extract model number and version number from a state message.
+
+    Handles both standard state format (0x81) and extended state format (0xEA 0x81).
+
+    Returns:
+        Tuple of (model_num, version_num), with version_num defaulting to 1 if not present.
+    """
+    if len(full_msg) >= 20 and full_msg[0] == 0xEA and full_msg[1] == 0x81:
+        # Extended state format
+        model_num = full_msg[LEDENET_EXTENDED_STATE_MODEL_POS]
+        version_num = (
+            full_msg[LEDENET_EXTENDED_STATE_VERSION_POS]
+            if len(full_msg) > LEDENET_EXTENDED_STATE_VERSION_POS
+            else 1
+        )
+    else:
+        # Standard state format
+        model_num = full_msg[LEDENET_STATE_MODEL_POS]
+        version_num = (
+            full_msg[LEDENET_STATE_VERSION_POS]
+            if len(full_msg) > LEDENET_STATE_VERSION_POS
+            else 1
+        )
+    return model_num, version_num
 
 
 def get_model(model_num: int, fallback_protocol: str | None = None) -> LEDENETModel:

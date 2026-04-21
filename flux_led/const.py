@@ -38,6 +38,55 @@ class MultiColorEffects(Enum):
     BREATHING = 0x05
 
 
+class ExtendedCustomEffectPattern(Enum):
+    """Pattern IDs for extended custom effects (e.g., 0xB6 device)."""
+
+    WAVE = 0x01
+    METEOR = 0x02
+    STREAMER = 0x03
+    BUILDING_BLOCKS = 0x04
+    FLOWING_WATER = 0x05
+    CHASE = 0x06
+    HORSE_RACING = 0x07
+    CYCLE = 0x08
+    BREATHE = 0x09
+    JUMP = 0x0A
+    STROBE = 0x0B
+    TWINKLING_STARS = 0x0C
+    STARS_WINK = 0x0D
+    WARNING = 0x0E
+    COLLISION = 0x0F
+    FIREWORKS = 0x10
+    COMET = 0x11
+    GRADIENT_METEOR = 0x12
+    VOLCANO = 0x13
+    SUPERLUMINAL = 0x14
+    RAINBOW_BRIDGE = 0x15
+    GRADIENT_OVERLAY = 0x16
+    STATIC_GRADIENT = 0x65
+    STATIC_FILL = 0x66
+
+
+class ExtendedCustomEffectDirection(Enum):
+    """Direction for extended custom effect animations."""
+
+    LEFT_TO_RIGHT = 0x01
+    RIGHT_TO_LEFT = 0x02
+
+
+class ExtendedCustomEffectOption(Enum):
+    """Option values for extended custom effects.
+
+    The meaning varies by pattern:
+    - Some patterns: DEFAULT=static color, VARIANT_1=color change
+    - Rainbow patterns: DEFAULT=strobe, VARIANT_1=twinkle, VARIANT_2=breathe
+    """
+
+    DEFAULT = 0x00
+    VARIANT_1 = 0x01
+    VARIANT_2 = 0x02
+
+
 DEFAULT_WHITE_CHANNEL_TYPE: Final = WhiteChannelType.WARM
 
 PRESET_MUSIC_MODE: Final = 0x62
@@ -161,3 +210,15 @@ MUSIC_PIXELS_PER_SEGMENT_MAX: Final = 150
 PUSH_UPDATE_INTERVAL = 90  # seconds
 
 NEVER_TIME = -PUSH_UPDATE_INTERVAL
+
+
+# Extended Timer Action Types (0xB6 devices)
+TIMER_ACTION_ON: Final = 0x23
+TIMER_ACTION_OFF: Final = 0x24
+TIMER_ACTION_COLOR: Final = 0xA1
+TIMER_ACTION_SCENE_GRADIENT: Final = 0x29
+TIMER_ACTION_SCENE_SEGMENTS: Final = 0x6B
+
+# Extended Timer Effect Types
+TIMER_EFFECT_GRADIENT: Final = 0x21  # e1 21 - gradient overlay
+TIMER_EFFECT_SEGMENTS: Final = 0x22  # e1 22 - static segments/colorful
