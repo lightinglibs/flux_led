@@ -184,12 +184,12 @@ class MagichomeServerProtocol(asyncio.Protocol):
 async def go():
     loop = asyncio.get_running_loop()
     await loop.create_server(
-        lambda: MagichomeServerProtocol(),
+        MagichomeServerProtocol,
         host="0.0.0.0",
         port=5577,
     )
     await loop.create_datagram_endpoint(
-        lambda: MagicHomeDiscoveryProtocol(),
+        MagicHomeDiscoveryProtocol,
         local_addr=("0.0.0.0", AIOBulbScanner.DISCOVERY_PORT),
     )
     await asyncio.sleep(86400)
