@@ -36,7 +36,7 @@ repos:
     rev: v3.21.2
     hooks:
       - id: pyupgrade
-        args: [--py39-plus]
+        args: [--py310-plus]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.11
     hooks:
@@ -49,7 +49,7 @@ repos:
       - id: python-typing-update
         stages: [manual]
         args:
-          - --py39-plus
+          - --py310-plus
           - --force
           - --keep-updates
         files: ^(flux_led)/.+\.py$
@@ -70,12 +70,12 @@ repos:
           - --python-version=3.13
         files: ^(flux_led)/.+\.py$
       - id: mypy
-        alias: mypy-py39
-        name: MyPy, for Python 3.9
+        alias: mypy-py310
+        name: MyPy, for Python 3.10
         additional_dependencies:
           - async_timeout
           - pytest
           - webcolors
         args:
-          - --python-version=3.9
+          - --python-version=3.10
         files: ^(flux_led)/.+\.py$
