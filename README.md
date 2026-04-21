@@ -22,7 +22,7 @@ in PyQt, Kivy, or some other framework.
 
 #### Minimum python version
 
-3.9
+3.10
 
 ##### Available:
 
