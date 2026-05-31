@@ -244,6 +244,10 @@ class LEDENETDevice:
         self._power_state_transition_complete_time: float = 0
         self._last_effect_brightness: int = 100
         self._device_config: LEDENETAddressableDeviceConfiguration | None = None
+        # Pending operating-mode number applied optimistically after a
+        # non-IC ``async_set_device_config`` call. Cleared on the next state
+        # response so the device's reported value remains authoritative.
+        self._pending_operating_mode_num: int | None = None
         self._last_message: dict[str, bytes] = {}
         self._unavailable_reason: str | None = None
 
@@ -524,6 +528,10 @@ class LEDENETDevice:
             return None
         if self._device_config:
             return self._device_config.operating_mode
+        if self._pending_operating_mode_num is not None:
+            return device_config.num_to_operating_mode.get(
+                self._pending_operating_mode_num
+            )
         assert self.raw_state is not None
         return device_config.num_to_operating_mode.get(self.raw_state.mode & 0x0F)
 
@@ -532,6 +540,8 @@ class LEDENETDevice:
         """Return the strip mode as a string."""
         if not self.model_data.device_config.operating_modes:
             return None
+        if self._pending_operating_mode_num is not None:
+            return self._pending_operating_mode_num
         assert self.raw_state is not None
         return self.raw_state.mode & 0x0F
 
@@ -795,6 +805,10 @@ class LEDENETDevice:
             self._protocol.named_raw_state(rx)
         )
         _LOGGER.debug("%s: State: %s", self.ipaddr, raw_state)
+        # A fresh state response from the device is authoritative; drop any
+        # optimistic operating-mode override stored after a recent
+        # ``async_set_device_config`` call.
+        self._pending_operating_mode_num = None
 
         if raw_state != self.raw_state:
             _LOGGER.debug(
