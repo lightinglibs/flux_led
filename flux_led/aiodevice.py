@@ -865,9 +865,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         for name, msg in self._last_message.items():
             parts.append(f"{name}={' '.join(f'0x{b:02X}' for b in msg)}")
         if self._buffer:
-            parts.append(
-                f"unparsed={' '.join(f'0x{b:02X}' for b in self._buffer)}"
-            )
+            parts.append(f"unparsed={' '.join(f'0x{b:02X}' for b in self._buffer)}")
         if not parts:
             return "no response received from device"
         return "; ".join(parts)
