@@ -224,6 +224,41 @@ async def test_invalid_initial_response(mock_aio_protocol):
 
 
 @pytest.mark.asyncio
+async def test_cannot_determine_protocol_surfaces_unparsed_bytes(mock_aio_protocol):
+    """Unparseable responses are surfaced in the failure for bug reports."""
+    light = AIOWifiLedBulb("192.168.1.166", timeout=0.01)
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+    # A response that no known protocol can parse (e.g. a new firmware
+    # variant) leaves bytes in the buffer that never form a full message.
+    light._aio_protocol.data_received(b"\x31\x25")
+    with pytest.raises(DeviceUnavailableException) as excinfo:
+        await task
+    assert "0x31 0x25" in str(excinfo.value)
+    assert not light.available
+
+
+@pytest.mark.asyncio
+async def test_cannot_determine_protocol_no_response(mock_aio_protocol):
+    """When the device never responds the failure says so explicitly."""
+    light = AIOWifiLedBulb("192.168.1.166", timeout=0.01)
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+    with pytest.raises(DeviceUnavailableException) as excinfo:
+        await task
+    assert "no response received from device" in str(excinfo.value)
+    assert not light.available
+
+
+@pytest.mark.asyncio
 async def test_cannot_determine_strip_type(mock_aio_protocol):
     """Test we raise RuntimeError when we cannot determine the strip type."""
     light = AIOWifiLedBulb("192.168.1.166", timeout=0.01)
