@@ -2788,7 +2788,7 @@ async def test_async_get_timers_socket_device(
     timers = await task
     assert len(timers) == 8
     assert len(timers[0].toBytes()) == 12
-    assert timers[0].toBytes() == b"\xf0\x00\x00\x00\x11/\x00\xfe\x00\x00\x00\x00"
+    assert timers[0].toBytes() == b"\xf0\x00\x00\x00\x11/\x00\xfe\x23\x00\x00\x00"
     assert str(timers[0]) == "[ON ] 17:47  SuMoTuWeThFrSa    "
     assert str(timers[1]) == "[ON ] 17:48  SuMoTuWeThFrSa    "
     assert str(timers[2]) == "[OFF] 17:48  SuMoTuWeThFrSa    "
