@@ -441,7 +441,7 @@ ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME = {
     237: "7 colors each in white run circularly, multi points from end to start",
     238: "7 colors each in red run circularly, multi points from start to end and return back",
     239: "7 colors each in green run circularly, multi points from start to end and return back",
-    240: "and return back7 colors each in blue run circularly, multi points from start to end",
+    240: "7 colors each in blue run circularly, multi points from start to end and return back",
     241: "7 colors each in yellow run circularly, multi points from start to end and return back",
     242: "7 colors each in purple run circularly, multi points from start to end and return back",
     243: "7 colors each in cyan run circularly, multi points from start to end and return back",
