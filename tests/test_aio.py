@@ -37,6 +37,8 @@ from flux_led.protocol import (
     PowerRestoreState,
     PowerRestoreStates,
     ProtocolLEDENET25Byte,
+    ProtocolLEDENETAddressableA2,
+    ProtocolLEDENETAddressableA3,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
     RemoteConfig,
@@ -1267,6 +1269,23 @@ async def test_ws2812b_older_a3(mock_aio_protocol, caplog: pytest.LogCaptureFixt
         transport.mock_calls[0][1][0]
         == b'\xb0\xb1\xb2\xb3\x00\x01\x01\x03\x00\x0bb\x01,\x00\x06\x01\x00\x96\x06\xf0"\x1a'
     )
+
+
+def test_addressable_a3_device_config_forwards_music_segments():
+    """A3 must forward the caller's music_segments, not substitute segments.
+
+    A3 wraps A2's device-config message. With pixels_per_segment above
+    MUSIC_PIXELS_PER_SEGMENT_MAX the music-sync override in A2 is skipped, so a
+    distinct music_segments value survives to the wire. The A2 inner message
+    therefore appears verbatim inside the A3 wrapper only when A3 forwards every
+    parameter unchanged.
+    """
+    # segments=4, music_pixels_per_segment=100, music_segments=5 (distinct from
+    # segments). pixels_per_segment=300 (> 150) disables the music-sync merge.
+    args = (0, 0, 4, 300, 4, 100, 5)
+    inner = ProtocolLEDENETAddressableA2().construct_device_config(*args)
+    wrapped = ProtocolLEDENETAddressableA3().construct_device_config(*args)
+    assert bytes(inner) in bytes(wrapped)
 
 
 @pytest.mark.asyncio
