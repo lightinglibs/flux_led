@@ -446,7 +446,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         """Set zones."""
         assert self._protocol is not None
         if not self._protocol.zones:
-            raise ValueError("{self.model} does not support zones")
+            raise ValueError(f"{self.model} does not support zones")
         assert self._device_config is not None
         assert isinstance(
             self._protocol,
@@ -470,7 +470,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         """Set music mode."""
         assert self._protocol is not None
         if not self.microphone:
-            raise ValueError("{self.model} does not have a built-in microphone")
+            raise ValueError(f"{self.model} does not have a built-in microphone")
         self._set_preset_pattern_transition_complete_time()
         self._replace_raw_state({"preset_pattern": PRESET_MUSIC_MODE})
         for idx, bytes_send in enumerate(
@@ -607,7 +607,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         """Unpair 2.4ghz remotes."""
         assert self._protocol is not None
         if self.paired_remotes is None:
-            raise ValueError("{self.model} does support unpairing remotes")
+            raise ValueError(f"{self.model} does not support unpairing remotes")
         await self._async_send_msg(self._protocol.construct_unpair_remotes())
         await self._async_send_msg(self._protocol.construct_query_remote_config())
 
@@ -615,7 +615,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         """Change remote config."""
         assert self._protocol is not None
         if self.paired_remotes is None:
-            raise ValueError("{self.model} does support unpairing remotes")
+            raise ValueError(f"{self.model} does not support unpairing remotes")
         await self._async_send_msg(
             self._protocol.construct_remote_config(remote_config)
         )
