@@ -25,6 +25,11 @@ from flux_led.const import (
     MAX_TEMP,
     MIN_TEMP,
     PUSH_UPDATE_INTERVAL,
+    TIMER_ACTION_COLOR,
+    TIMER_ACTION_OFF,
+    TIMER_ACTION_ON,
+    TIMER_ACTION_SCENE_GRADIENT,
+    TIMER_ACTION_SCENE_SEGMENTS,
     ExtendedCustomEffectDirection,
     ExtendedCustomEffectOption,
     ExtendedCustomEffectPattern,
@@ -59,7 +64,7 @@ from flux_led.scanner import (
     is_legacy_device,
     merge_discoveries,
 )
-from flux_led.timer import LedTimer
+from flux_led.timer import LedTimer, LedTimerExtended
 
 IP_ADDRESS = "127.0.0.1"
 MODEL_NUM_HEX = "0x35"
@@ -5750,3 +5755,426 @@ async def test_named_effect_extended_custom_meteor(mock_aio_protocol):
     await task
 
     assert light.effect == "Meteor"
+
+
+def test_protocol_construct_get_timers_0xB6():
+    """Test timer query construction for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+    msg = proto.construct_get_timers()
+
+    # Should be wrapped message with inner content [0xE0, 0x06]
+    assert msg[0:6] == bytes([0xB0, 0xB1, 0xB2, 0xB3, 0x00, 0x01])
+    # Version byte at position 6
+    assert msg[6] == 0x01
+    # Inner message length at positions 8-9 (should be 2)
+    assert msg[8] == 0x00
+    assert msg[9] == 0x02
+    # Inner message starts at position 10
+    assert msg[10] == 0xE0
+    assert msg[11] == 0x06
+
+
+def test_protocol_is_valid_timers_response_0xB6():
+    """Test timer response validation for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Valid response starts with e0 06
+    assert proto.is_valid_timers_response(bytes([0xE0, 0x06])) is True
+    assert proto.is_valid_timers_response(bytes([0xE0, 0x06, 0x01, 0x02])) is True
+
+    # Invalid responses
+    assert proto.is_valid_timers_response(bytes([0xE0])) is False
+    assert proto.is_valid_timers_response(bytes([0x01, 0x22])) is False
+    assert proto.is_valid_timers_response(bytes([])) is False
+
+
+def test_protocol_parse_get_timers_empty_0xB6():
+    """Test parsing empty timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Empty response (no timers configured)
+    response = bytes([0xE0, 0x06])
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 0
+
+
+def test_protocol_parse_get_timers_single_0xB6():
+    """Test parsing single timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Response with one timer: 13:25 OFF, no repeat
+    # Format: e0 06 [slot1: 21 bytes] [empty slots 2-6: 7 bytes each]
+    response = bytes.fromhex(
+        "e006"  # Header
+        "01f00d1900000ee001002400000000000000000000"  # Slot 1: 13:25 OFF
+        "0264640000690003000000000000040000000000000500000000000006000000000000"  # Slots 2-6 empty
+    )
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 6
+
+    # First timer should be active
+    timer1 = timers[0]
+    assert timer1.slot == 1
+    assert timer1.active is True
+    assert timer1.hour == 13
+    assert timer1.minute == 25
+    assert timer1.repeat_mask == 0
+    assert timer1.action_type == 0x24  # OFF
+
+    # Remaining timers should be inactive
+    for i in range(1, 6):
+        assert timers[i].active is False
+
+
+def test_protocol_parse_get_timers_multiple_0xB6():
+    """Test parsing multiple timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Response with three timers (from actual packet capture)
+    # Format: e0 06 [slot1: 21 bytes] [slot2: 21 bytes] [slot3: 21 bytes] [slots 4-6: 7 bytes each]
+    response = bytes.fromhex(
+        "e006"  # Header
+        "01f00d1900000ee001002400000000000000000000"  # Slot 1: 13:25 OFF
+        "02f00f2300000ee001002400000000000000000000"  # Slot 2: 15:35 OFF
+        "03f00d2100000ee001002400000000000000000000"  # Slot 3: 13:33 OFF
+        "04000000000000"  # Slot 4 empty
+        "05000000000000"  # Slot 5 empty
+        "06000000000000"  # Slot 6 empty
+    )
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 6
+
+    # Check active timers
+    assert timers[0].slot == 1
+    assert timers[0].hour == 13
+    assert timers[0].minute == 25
+    assert timers[0].active is True
+
+    assert timers[1].slot == 2
+    assert timers[1].hour == 15
+    assert timers[1].minute == 35
+    assert timers[1].active is True
+
+    assert timers[2].slot == 3
+    assert timers[2].hour == 13
+    assert timers[2].minute == 33
+    assert timers[2].active is True
+
+    # Check inactive timers
+    assert timers[3].active is False
+    assert timers[4].active is False
+    assert timers[5].active is False
+
+
+def test_protocol_parse_get_timers_with_color_0xB6():
+    """Test parsing timer with color action for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Build a timer response with color action (0xa1)
+    # Slot 1: 17:15, Sun+Tue repeat (0x84), color action with HSV
+    inner_slot1 = bytes.fromhex("01f0110f00840ee00100a17be432000000000000")
+    inner_empty = bytes.fromhex(
+        "02000000000000030000000000000400000000000005000000000000060000000000"
+    )
+
+    response = bytes([0xE0, 0x06]) + inner_slot1 + inner_empty
+    timers = proto.parse_get_timers(response)
+
+    # Check first timer
+    timer1 = timers[0]
+    assert timer1.slot == 1
+    assert timer1.hour == 17
+    assert timer1.minute == 15
+    assert timer1.repeat_mask == 0x84  # Sun + Tue
+    assert timer1.action_type == 0xA1  # Color
+    assert timer1.color_hsv == (0x7B, 0xE4, 0x32)  # (123, 228, 50)
+
+
+def test_led_timer_extended_simple_on():
+    """Test LedTimerExtended for simple ON action."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=8,
+        minute=30,
+        repeat_mask=LedTimerExtended.Weekdays,
+        action_type=TIMER_ACTION_ON,
+    )
+
+    assert timer.is_on is True
+    assert timer.is_scene is False
+    assert timer.is_color is False
+    assert timer.repeat_days == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[0] == 0xF0  # Active flag
+    assert data[1] == 8  # Hour
+    assert data[2] == 30  # Minute
+    assert data[9] == 0x23  # ON action
+
+
+def test_led_timer_extended_simple_off():
+    """Test LedTimerExtended for simple OFF action."""
+    timer = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=22,
+        minute=0,
+        repeat_mask=0,  # No repeat
+        action_type=TIMER_ACTION_OFF,
+    )
+
+    assert timer.is_on is False
+    assert timer.repeat_days == []
+
+    data = timer.to_bytes()
+    assert data[9] == 0x24  # OFF action
+
+
+def test_led_timer_extended_color():
+    """Test LedTimerExtended for color action."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=17,
+        minute=15,
+        repeat_mask=0x84,  # Sun + Tue
+        action_type=TIMER_ACTION_COLOR,
+        color_hsv=(123, 228, 50),
+    )
+
+    assert timer.is_on is True
+    assert timer.is_color is True
+    assert timer.repeat_days == ["Tue", "Sun"]
+
+    data = timer.to_bytes()
+    assert data[9] == 0xA1  # Color action
+    assert data[10] == 123  # Hue
+    assert data[11] == 228  # Saturation
+    assert data[12] == 50  # Brightness
+
+
+def test_led_timer_extended_inactive():
+    """Test LedTimerExtended for inactive timer."""
+    timer = LedTimerExtended(
+        slot=3,
+        active=False,
+    )
+
+    data = timer.to_bytes()
+    # Inactive timer should be all zeros
+    assert data == bytes(20)
+
+
+def test_led_timer_extended_from_bytes_simple():
+    """Test LedTimerExtended.from_bytes for simple timer."""
+    # Simple OFF timer: slot 1, 13:25, no repeat (21 bytes)
+    data = bytes.fromhex("01f00d1900000ee001002400000000000000000000")
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert consumed == 21
+    assert timer.slot == 1
+    assert timer.active is True
+    assert timer.hour == 13
+    assert timer.minute == 25
+    assert timer.repeat_mask == 0
+    assert timer.action_type == 0x24  # OFF
+
+
+def test_led_timer_extended_from_bytes_empty():
+    """Test LedTimerExtended.from_bytes for empty slot."""
+    # Empty slot
+    data = bytes.fromhex("0300000000000000")
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert consumed == 7
+    assert timer.slot == 3
+    assert timer.active is False
+
+
+def test_led_timer_extended_str():
+    """Test LedTimerExtended string representation."""
+    timer_off = LedTimerExtended(
+        slot=1, active=True, hour=22, minute=0, action_type=TIMER_ACTION_OFF
+    )
+    assert "OFF" in str(timer_off)
+    assert "22:00" in str(timer_off)
+
+    timer_on = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=8,
+        minute=30,
+        repeat_mask=LedTimerExtended.Weekdays,
+        action_type=TIMER_ACTION_ON,
+    )
+    assert "ON" in str(timer_on)
+    assert "Mon" in str(timer_on)
+
+    timer_inactive = LedTimerExtended(slot=3, active=False)
+    assert "Unset" in str(timer_inactive)
+
+
+def test_protocol_construct_set_timer_0xB6():
+    """Test timer set construction for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=13,
+        minute=25,
+        repeat_mask=0,
+        action_type=TIMER_ACTION_OFF,
+    )
+
+    msg = proto.construct_set_timer(timer)
+
+    # Should be wrapped message
+    assert msg[0:6] == bytes([0xB0, 0xB1, 0xB2, 0xB3, 0x00, 0x01])
+    # Version byte
+    assert msg[6] == 0x01
+    # Inner message starts at position 10
+    assert msg[10] == 0xE0  # Extended command
+    assert msg[11] == 0x05  # Set timer command
+    assert msg[12] == 0x01  # Slot number
+
+
+def test_led_timer_extended_scene_gradient():
+    """Test LedTimerExtended for scene gradient action."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=18,
+        minute=30,
+        repeat_mask=LedTimerExtended.Everyday,
+        action_type=TIMER_ACTION_SCENE_GRADIENT,
+        pattern=ExtendedCustomEffectPattern.WAVE,
+        speed=80,
+        colors=[(100, 100, 100), (50, 50, 50)],
+    )
+
+    assert timer.is_on is True
+    assert timer.is_scene is True
+    assert timer.is_color is False
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[0] == 0xF0  # Active flag
+    assert data[1] == 18  # Hour
+    assert data[2] == 30  # Minute
+    assert data[5] == TIMER_ACTION_SCENE_GRADIENT
+    assert data[6] == 0xE1  # Effect marker
+    assert data[7] == 0x21  # Gradient effect type
+
+    # Test __str__
+    s = str(timer)
+    assert "Scene: Wave" in s
+    assert "2 colors" in s
+
+
+def test_led_timer_extended_scene_segments():
+    """Test LedTimerExtended for scene segments (colorful) action."""
+    timer = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=20,
+        minute=0,
+        repeat_mask=LedTimerExtended.Weekend,
+        action_type=TIMER_ACTION_SCENE_SEGMENTS,
+        colors=[(180, 100, 100), (0, 100, 100), (60, 100, 100)],
+    )
+
+    assert timer.is_scene is True
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[5] == TIMER_ACTION_SCENE_SEGMENTS
+    assert data[6] == 0xE1  # Effect marker
+    assert data[7] == 0x22  # Segments effect type
+
+    # Test __str__
+    s = str(timer)
+    assert "Colorful" in s
+    assert "3 colors" in s
+
+
+def test_led_timer_extended_from_bytes_scene_gradient():
+    """Test LedTimerExtended.from_bytes for scene gradient timer."""
+    # Scene gradient timer from real device data:
+    # slot=4, 18:38, repeat=0x0f, action=0x29, e1 21 header, 5 colors
+    data = bytes.fromhex(
+        "04f0122600f629e12100500300016450000000000000050c646400001e646400005a646400006ce464000096646400"
+    )
+
+    timer, _consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert timer.slot == 4
+    assert timer.active is True
+    assert timer.hour == 18
+    assert timer.minute == 38
+    assert timer.repeat_mask == 0xF6  # All days except bit 0 and 3
+    assert timer.action_type == TIMER_ACTION_SCENE_GRADIENT
+    assert len(timer.colors) == 5
+    # First color: 0c 64 64 = (12, 100, 100)
+    assert timer.colors[0] == (0x0C, 0x64, 0x64)
+
+
+def test_led_timer_extended_from_bytes_scene_segments():
+    """Test LedTimerExtended.from_bytes for scene segments timer."""
+    # Scene segments timer: slot=1, 12:00, e1 22 header, 3 colors
+    # Construct a minimal segments timer
+    data = bytearray()
+    data.append(0x01)  # slot
+    data.append(0xF0)  # flags
+    data.append(12)  # hour
+    data.append(0)  # minute
+    data.append(0)  # seconds
+    data.append(0)  # repeat
+    data.append(0x6B)  # action (segments)
+    data.append(0xE1)  # effect marker
+    data.append(0x22)  # segments type
+    data.extend([0, 0, 0, 0])  # header padding
+    data.append(3)  # num colors
+    # 3 colors (5 bytes each)
+    data.extend([100, 100, 50, 0, 0])
+    data.extend([50, 80, 60, 0, 0])
+    data.extend([150, 90, 70, 0, 0])
+
+    timer, _consumed = LedTimerExtended.from_bytes(bytes(data), 0)
+
+    assert timer.slot == 1
+    assert timer.active is True
+    assert timer.action_type == TIMER_ACTION_SCENE_SEGMENTS
+    assert len(timer.colors) == 3
+    assert timer.colors[0] == (100, 100, 50)
+    assert timer.colors[1] == (50, 80, 60)
+    assert timer.colors[2] == (150, 90, 70)
+
+
+def test_led_timer_extended_str_unknown_action():
+    """Test LedTimerExtended.__str__ for unknown action type."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=10,
+        minute=30,
+        action_type=0xFF,  # Unknown action
+    )
+
+    s = str(timer)
+    assert "Unknown action: 0xff" in s
+
+
+def test_led_timer_extended_from_bytes_truncated():
+    """Test LedTimerExtended.from_bytes handles truncated data."""
+    # Only 5 bytes - not enough for a valid timer
+    data = bytes([0x01, 0xF0, 12, 30, 0])
+    _timer, consumed = LedTimerExtended.from_bytes(data, 0)
+    assert consumed == 5  # Returns what's available
