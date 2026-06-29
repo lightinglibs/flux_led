@@ -1480,6 +1480,7 @@ class TestLight(unittest.TestCase):
         mock_read.side_effect = read_data
         with self.assertRaisesRegex(Exception, "Cannot determine protocol"):
             flux_led.WifiLedBulb("192.168.1.199")
+
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
     @patch("flux_led.WifiLedBulb.connect")

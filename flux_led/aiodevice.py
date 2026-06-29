@@ -34,7 +34,10 @@ from .const import (
     STATE_GREEN,
     STATE_RED,
     STATE_WARM_WHITE,
+    ExtendedCustomEffectDirection,
     MultiColorEffects,
+    ScribbleEffect,
+    ScribbleLED,
 )
 from .protocol import (
     POWER_RESTORE_BYTES_TO_POWER_RESTORE,
@@ -462,6 +465,38 @@ class AIOWifiLedBulb(LEDENETDevice):
             segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
         """
         await self._async_send_msg(self._generate_custom_segment_colors(segments))
+
+    async def async_set_scribble(
+        self,
+        leds: list[ScribbleLED],
+        effect: ScribbleEffect | int = ScribbleEffect.STATIC,
+        direction: ExtendedCustomEffectDirection = (
+            ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+        ),
+        density: int = 80,
+        speed: int = 100,
+        enter_mode: bool = True,
+    ) -> None:
+        """Set a per-LED ('scribble') configuration on a 0xB6 device.
+
+        Renders every LED via grouped E1 26 paints (one per color/blink group),
+        covering all N LEDs including an (0,0,0) group for off bulbs. Per-LED
+        blink/color come from each ScribbleLED. ``effect`` is a ScribbleEffect or
+        a raw int id 0x00-0x08 (ids 3,4,6,7 are valid effects with no UI name).
+        When enter_mode is True, first sends one all-zero E1 23 to guarantee
+        scribble-mode entry from another mode (E1 26 alone also works when
+        already in scribble). E1 23 does NOT render -- all colors render through
+        E1 26 (verified on hardware).
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        num_leds = self.led_count or len(leds)
+        if enter_mode:
+            await self._async_send_msg(self._generate_scribble_init(num_leds))
+        for msg in self._scribble_paint_groups(
+            leds, effect, direction.value, density, speed, num_leds
+        ):
+            await self._async_send_msg(msg)
 
     async def async_set_effect(
         self, effect: str, speed: int, brightness: int = 100
