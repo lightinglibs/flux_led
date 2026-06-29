@@ -50,6 +50,9 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_WARM_WHITE,
     STATIC_MODES,
     ExtendedCustomEffectPattern,
+    ScribbleBlinkMode,
+    ScribbleEffect,
+    ScribbleLED,
     WhiteChannelType,
 )
 from .models_db import (
@@ -653,6 +656,11 @@ class LEDENETDevice:
     @property
     def supports_extended_custom_effects(self) -> bool:
         """Return True if the device uses the extended custom protocol."""
+        return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    @property
+    def supports_scribble(self) -> bool:
+        """Return True if the device supports the per-LED scribble feature."""
         return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
 
     @property
@@ -1416,6 +1424,145 @@ class LEDENETDevice:
         assert self._protocol is not None
         assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
         return self._protocol.construct_custom_segment_colors(segments)
+
+    def _generate_scribble_init(self, num_leds: int) -> bytearray:
+        """Generate the scribble-mode init (E1 23, non-rendering) bytes.
+
+        E1 23 does not render -- it only guarantees scribble-mode entry. Colors
+        render through grouped E1 26 paints (see _scribble_paint_groups).
+        """
+        # The E1 23 byte-8 count and the E1 26 bitmap sizing are one-byte /
+        # ceil(N/8) fields; N is unrepresentable above 255 on the wire.
+        if not 0 < num_leds <= 255:
+            raise ValueError(f"num_leds must be 1..255, got {num_leds}")
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_scribble_init(num_leds)
+
+    def _generate_scribble_paint(
+        self,
+        effect: int,
+        direction: int,
+        density: int,
+        speed: int,
+        color: tuple[int, int, int] | None,
+        white: int | None,
+        blink_mode: int,
+        blink_speed: int,
+        led_indices: list[int] | None,
+        num_leds: int,
+    ) -> bytearray:
+        """Generate a single scribble paint (E1 26) for one color/blink group.
+
+        Color and white are mutually exclusive. Colors are converted to
+        (H/2, S, V) via the existing _rgb_to_hsv_bytes helper.
+        """
+        if color is not None and white is not None:
+            raise ValueError("color and white are mutually exclusive")
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        if color is not None:
+            h2, s, v = self._protocol._rgb_to_hsv_bytes(*color)[:3]
+            white_level = 0
+        else:
+            h2 = s = v = 0
+            white_level = white or 0
+        if led_indices is not None:
+            for i in led_indices:
+                if not 0 <= i < num_leds:
+                    raise ValueError(f"LED index {i} out of range for {num_leds} LEDs")
+        return self._protocol.construct_scribble_paint(
+            effect=effect,
+            direction=direction,
+            density=density,
+            speed=speed,
+            blink_mode=blink_mode,
+            h2=h2,
+            s=s,
+            v=v,
+            white=white_level,
+            blink_speed=blink_speed,
+            bitmap_leds=led_indices,
+            num_leds=num_leds,
+        )
+
+    def _scribble_paint_groups(
+        self,
+        leds: list[ScribbleLED],
+        effect: ScribbleEffect | int,
+        direction: int,
+        density: int,
+        speed: int,
+        num_leds: int,
+    ) -> list[bytearray]:
+        """Group per-LED settings and return one E1 26 paint per group.
+
+        This is the primary render path for every scribble call (E1 23 does
+        not render). LEDs are grouped by (rgb, white, blink_mode, blink_speed)
+        in first-appearance order; an off LED (rgb None, white None) is painted
+        as color (0,0,0). The union of all group bitmaps covers exactly the N
+        LEDs, so the result is deterministic regardless of prior device state.
+        """
+        if not leds:
+            raise ValueError("leds must not be empty")
+        if not 0 < num_leds <= 255:
+            raise ValueError(f"num_leds must be 1..255, got {num_leds}")
+        if self.led_count is not None and self.led_count != len(leds):
+            raise ValueError(f"Got {len(leds)} LEDs but device has {self.led_count}")
+        if num_leds != len(leds):
+            raise ValueError(f"num_leds {num_leds} does not match {len(leds)} LEDs")
+
+        # effect may be a ScribbleEffect (the 5 named ones) or a raw int id.
+        # The device accepts effect ids 0x00-0x08 (verified on-device); ids 3,4,
+        # 6,7 are valid effects with no UI name, reachable only as raw ints.
+        effect_id = effect.value if isinstance(effect, ScribbleEffect) else int(effect)
+        if not 0x00 <= effect_id <= 0x08:
+            raise ValueError(f"scribble effect id must be 0x00-0x08, got {effect_id}")
+
+        # Validate per-LED settings and bucket indices by group key.
+        groups: dict[
+            tuple[tuple[int, int, int] | None, int | None, ScribbleBlinkMode, int],
+            list[int],
+        ] = {}
+        for idx, led in enumerate(leds):
+            if led.rgb is not None and led.white is not None:
+                raise ValueError(f"LED {idx}: rgb and white are mutually exclusive")
+            if led.rgb is not None:
+                if len(led.rgb) != 3 or any(not 0 <= c <= 255 for c in led.rgb):
+                    raise ValueError(f"LED {idx}: rgb values must be 0-255")
+            if led.white is not None and not 0 <= led.white <= 100:
+                raise ValueError(f"LED {idx}: white must be 0-100")
+            if not 0 <= led.blink_speed <= 100:
+                raise ValueError(f"LED {idx}: blink_speed must be 0-100")
+            key = (led.rgb, led.white, led.blink_mode, led.blink_speed)
+            groups.setdefault(key, []).append(idx)
+
+        messages: list[bytearray] = []
+        for (rgb, white, blink_mode, blink_speed), indices in groups.items():
+            # Off LEDs (rgb None and white None) paint as color (0,0,0).
+            color: tuple[int, int, int] | None
+            paint_white: int | None
+            if rgb is None and white is None:
+                color = (0, 0, 0)
+                paint_white = None
+            else:
+                color = rgb
+                paint_white = white
+            messages.append(
+                self._generate_scribble_paint(
+                    effect=effect_id,
+                    direction=direction,
+                    density=density,
+                    speed=speed,
+                    color=color,
+                    white=paint_white,
+                    blink_mode=blink_mode.value,
+                    blink_speed=blink_speed,
+                    led_indices=indices,
+                    num_leds=num_leds,
+                )
+            )
+        return messages
 
     def _effect_to_pattern(self, effect: str) -> int:
         """Convert an effect to a pattern code."""

@@ -22,6 +22,9 @@ from .const import (
     STATE_GREEN,
     STATE_RED,
     STATE_WARM_WHITE,
+    ExtendedCustomEffectDirection,
+    ScribbleEffect,
+    ScribbleLED,
 )
 from .scanner import FluxLEDDiscovery
 from .sock import _socket_retry
@@ -443,6 +446,40 @@ class WifiLedBulb(LEDENETDevice):
             0,
             retry=retry,
         )
+
+    def setScribble(
+        self,
+        leds: list[ScribbleLED],
+        effect: ScribbleEffect | int = ScribbleEffect.STATIC,
+        direction: ExtendedCustomEffectDirection = (
+            ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+        ),
+        density: int = 80,
+        speed: int = 100,
+        enter_mode: bool = True,
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set a per-LED ('scribble') configuration on a 0xB6 device.
+
+        Renders every LED via grouped E1 26 paints (one per color/blink group),
+        covering all N LEDs including an (0,0,0) group for off bulbs. Per-LED
+        blink/color come from each ScribbleLED. ``effect`` is a ScribbleEffect or
+        a raw int id 0x00-0x08 (ids 3,4,6,7 are valid effects with no UI name).
+        When enter_mode is True, first sends one all-zero E1 23 to guarantee
+        scribble-mode entry. E1 23 does NOT render -- all colors render through
+        E1 26 (verified on hardware).
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        num_leds = self.led_count or len(leds)
+        if enter_mode:
+            self._send_and_read_with_retry(
+                self._generate_scribble_init(num_leds), 0, retry=retry
+            )
+        for msg in self._scribble_paint_groups(
+            leds, effect, direction.value, density, speed, num_leds
+        ):
+            self._send_and_read_with_retry(msg, 0, retry=retry)
 
     def refreshState(self) -> None:
         return self.update_state()

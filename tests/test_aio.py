@@ -29,6 +29,9 @@ from flux_led.const import (
     ExtendedCustomEffectOption,
     ExtendedCustomEffectPattern,
     MultiColorEffects,
+    ScribbleBlinkMode,
+    ScribbleEffect,
+    ScribbleLED,
     WhiteChannelType,
 )
 from flux_led.protocol import (
@@ -4459,6 +4462,8 @@ def test_extended_state_led_count():
     # Too-short / invalid frame returns None
     assert proto.extended_state_led_count(b"\xea\x81\x01") is None
     assert proto.extended_state_led_count(b"\x00" * 27) is None
+
+
 def test_extended_custom_effect_pattern_enum_values():
     """Test ExtendedCustomEffectPattern enum has expected values."""
     assert ExtendedCustomEffectPattern.WAVE.value == 0x01
@@ -5189,6 +5194,438 @@ async def test_async_set_custom_segment_colors_0xB6(mock_aio_protocol):
     # Verify it's a wrapped message
     assert written_data[0] == 0xB0
     assert written_data[1] == 0xB1
+
+
+# Scribble (per-LED) feature tests (0xB6)
+
+
+def _inner_of(wrapped: bytearray) -> bytes:
+    """Extract the inner message from a B0B1B2B3-wrapped result.
+
+    wrapper = b0 b1 b2 b3 | 00 01 | ver | counter | len_hi len_lo | inner | cksum
+    """
+    inner_len = (wrapped[8] << 8) | wrapped[9]
+    return bytes(wrapped[10 : 10 + inner_len])
+
+
+ALL_ON_100 = bytes.fromhex("ff" * 12 + "f0")  # N=100, 13 bytes
+ALL_ON_80 = bytes.fromhex("ff" * 10)  # N=80, 10 bytes
+OFF0_80 = bytes.fromhex("80" + "00" * 9)  # N=80, only LED 0
+GROUP_40_79_80 = bytes.fromhex("00" * 5 + "ff" * 5)  # N=80, LEDs 40-79
+
+
+def _h(s: str) -> bytes:
+    return bytes.fromhex(s.replace(" ", ""))
+
+
+def test_scribble_bitmap_n100():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap(range(100), 100)
+    assert len(bitmap) == 13
+    assert bitmap == ALL_ON_100
+    assert bitmap[-1] == 0xF0
+
+
+def test_scribble_bitmap_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap(range(80), 80)
+    assert len(bitmap) == 10
+    assert bitmap == ALL_ON_80
+
+
+def test_scribble_bitmap_led0():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap([0], 80)
+    assert bitmap[0] == 0x80
+
+
+def test_scribble_bitmap_led7():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap([7], 80)
+    assert bitmap[0] == 0x01
+
+
+def test_scribble_bitmap_out_of_range():
+    proto = ProtocolLEDENETExtendedCustom()
+    with pytest.raises(ValueError):
+        proto._scribble_bitmap([80], 80)
+    with pytest.raises(ValueError):
+        proto._scribble_bitmap([-1], 80)
+
+
+def test_scribble_paint_all_green_static_n100():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x00,
+            direction=0x01,
+            density=0x50,
+            speed=0x64,
+            blink_mode=0x00,
+            h2=0x3C,
+            s=0x64,
+            v=0x64,
+            white=0x00,
+            blink_speed=0x64,
+            num_leds=100,
+        )
+    )
+    assert inner[:2] == b"\xe1\x26"
+    assert inner == _h("e1 26 00 01 50 64 00 3c 64 64 00 00 64") + ALL_ON_100
+
+
+def test_scribble_paint_blue_50pct():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(h2=0x78, s=0x64, v=0x32, num_leds=80)
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 78 64 32 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_white_100():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(h2=0x78, s=0x64, v=0x00, white=0x64, num_leds=80)
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 78 64 00 00 64 64") + ALL_ON_80
+
+
+def test_scribble_paint_fast_blink_50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            blink_mode=0x10, h2=0x78, s=0x64, v=0x64, blink_speed=0x32, num_leds=80
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 10 78 64 64 00 00 32") + ALL_ON_80
+
+
+def test_scribble_paint_slow_blink_50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            blink_mode=0x08, h2=0x78, s=0x64, v=0x64, blink_speed=0x32, num_leds=80
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 08 78 64 64 00 00 32") + ALL_ON_80
+
+
+def test_scribble_paint_flowing_r2l_speed50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x01,
+            direction=0x02,
+            speed=0x32,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 01 02 50 32 00 78 64 64 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_twinkling_d50_s61():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x03,
+            direction=0x02,
+            density=0x32,
+            speed=0x3D,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 03 02 32 3d 00 78 64 64 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_off_bulb0_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x00,
+            density=0x50,
+            h2=0x00,
+            s=0x00,
+            v=0x00,
+            blink_speed=0x64,
+            bitmap_leds=[0],
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64") + OFF0_80
+
+
+def test_scribble_paint_flowing_blue_group_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x01,
+            direction=0x02,
+            density=0x50,
+            speed=0x26,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            blink_speed=0x64,
+            bitmap_leds=list(range(40, 80)),
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 01 02 50 26 00 78 64 64 00 00 64") + GROUP_40_79_80
+
+
+def test_scribble_init_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(proto.construct_scribble_init(80))
+    assert inner[:9] == _h("e1 23 01 00 01 50 64 00 50")
+    assert inner[9:] == _h("00 00 00 00 00 00 64") * 80
+    assert len(inner) == 569  # 9 + 7*80
+
+
+@pytest.mark.asyncio
+async def test_generate_scribble_init_invalid(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255"):
+        light._generate_scribble_init(0)
+    # 256 exceeds the one-byte E1 23 count / bitmap addressing limit and must
+    # raise the descriptive error, not the generic "byte must be in range".
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255, got 256"):
+        light._generate_scribble_init(256)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_num_leds_over_255_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    light._extended_led_count = None  # bypass the led_count mismatch check
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 256
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255, got 256"):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 256)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_rgb_and_white_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0), white=50)] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_channel_out_of_range_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(300, 0, 0))] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_effect_int_and_enum(mock_aio_protocol):
+    """effect accepts a raw int id (e.g. 4, unnamed) or a ScribbleEffect; the
+    device-valid range is 0x00-0x08, anything else raises ValueError."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 80
+    # raw int id not exposed as a name (3,4,6,7 are valid on-device)
+    assert (
+        _inner_of(light._scribble_paint_groups(leds, 4, 0x01, 0x50, 0x64, 80)[0])[2]
+        == 4
+    )
+    # enum still works
+    assert (
+        _inner_of(
+            light._scribble_paint_groups(
+                leds, ScribbleEffect.FLOWING, 0x01, 0x50, 0x64, 80
+            )[0]
+        )[2]
+        == 0x01
+    )
+    # out-of-range id (device accepts only 0x00-0x08)
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 9, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_wrong_count_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 40
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 40)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_empty_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups([], 0x00, 0x01, 0x50, 0x64, 0)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_two_color_static(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2  # red group then blue group, first-appearance order
+    red = _inner_of(msgs[0])
+    blue = _inner_of(msgs[1])
+    # red occupies LEDs 0-39, blue 40-79
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+    assert blue[13:] == GROUP_40_79_80
+    # blue hue byte (h2) = 0x78
+    assert blue[7] == 0x78
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_blink_grouping(mock_aio_protocol):
+    """LEDs with different blink modes split into separate E1 26 groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.FAST)] * 40 + [
+        ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.NONE)
+    ] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2  # same color, different blink -> two groups
+    fast = _inner_of(msgs[0])
+    steady = _inner_of(msgs[1])
+    assert fast[6] == 0x10  # FAST blink byte
+    assert steady[6] == 0x00  # NONE blink byte
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_off_group_color_zero(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2
+    off = _inner_of(msgs[1])
+    # off group: all-zero color, header matches the off golden
+    assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+    assert off[13:] == _h("7f" + "ff" * 8 + "ff")  # LEDs 1-79 set
+
+
+async def _setup_scribble_light(mock_aio_protocol, led_count_byte=0x50):
+    """Set up a 0xB6 AIO light with a known led_count from state byte 18."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                led_count_byte,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+    transport.reset_mock()
+    return light, transport
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_static_two_color(mock_aio_protocol):
+    """STATIC 2-color config sends E1 23 init + one E1 26 per color group."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(leds, effect=ScribbleEffect.STATIC)
+
+    assert len(sent) == 3
+    init = _inner_of(sent[0])
+    assert init[:2] == b"\xe1\x23"
+    assert len(init) == 569
+    red = _inner_of(sent[1])
+    blue = _inner_of(sent[2])
+    assert red[:2] == b"\xe1\x26"
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+    assert blue[13:] == GROUP_40_79_80
+    assert blue[7] == 0x78  # blue hue
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_no_enter_mode(mock_aio_protocol):
+    """enter_mode=False sends no E1 23, one E1 26 per group."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(leds, enter_mode=False)
+    assert len(sent) == 2
+    assert _inner_of(sent[0])[:2] == b"\xe1\x26"
+    assert _inner_of(sent[1])[:2] == b"\xe1\x26"
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_flowing_blue_group(mock_aio_protocol):
+    """FLOWING effect: blue group paint matches the captured golden."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(
+            leds,
+            effect=ScribbleEffect.FLOWING,
+            direction=ExtendedCustomEffectDirection.RIGHT_TO_LEFT,
+            density=0x50,
+            speed=0x26,
+        )
+    assert len(sent) == 3
+    red = _inner_of(sent[1])
+    blue = _inner_of(sent[2])
+    # blue group matches the captured golden
+    assert blue == _h("e1 26 01 02 50 26 00 78 64 64 00 00 64") + GROUP_40_79_80
+    # red group carries red color on LEDs 0-39 under the same effect
+    assert red[:7] == _h("e1 26 01 02 50 26 00")
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_off_group(mock_aio_protocol):
+    """Mixed lit + off config: off group paints all-zero color."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
+        await light.async_set_scribble(leds, enter_mode=False)
+    assert len(sent) == 2
+    red = _inner_of(sent[0])
+    off = _inner_of(sent[1])
+    assert red[13:] == OFF0_80
+    assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+
+
+@pytest.mark.asyncio
+async def test_supports_scribble_property(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.supports_scribble is True
 
 
 # Tests for extended_custom_effect_pattern_list property (base_device.py line 658)

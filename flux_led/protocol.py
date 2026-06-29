@@ -7,6 +7,7 @@ import contextlib
 import datetime
 import logging
 from abc import abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple
@@ -1679,6 +1680,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         if not self.is_valid_extended_state_response(raw_state):
             return None
         return raw_state[LEDENET_EXTENDED_STATE_LED_COUNT_POS]
+
     def _rgb_to_hsv_bytes_rgbw(
         self, r: int, g: int, b: int, white: int = 0
     ) -> list[int]:
@@ -1896,6 +1898,107 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             else:
                 msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
 
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    @staticmethod
+    def _scribble_bitmap(led_indices: Iterable[int], num_leds: int) -> bytearray:
+        """Build a ceil(num_leds/8)-byte MSB-first bitmap.
+
+        LED i -> byte i//8, bit 7-(i%8). Bit set = 'apply this command to LED i'.
+        Trailing pad bits in the last byte are 0 (e.g. N=100 -> 13 bytes, last
+        byte 0xf0; N=80 -> 10 bytes, no pad).
+        """
+        nbytes = (num_leds + 7) // 8
+        bitmap = bytearray(nbytes)
+        for i in led_indices:
+            if not 0 <= i < num_leds:
+                raise ValueError(f"LED index {i} out of range for {num_leds} LEDs")
+            bitmap[i // 8] |= 0x80 >> (i % 8)
+        return bitmap
+
+    def construct_scribble_init(self, num_leds: int) -> bytearray:
+        """Construct a scribble-mode init command (0xE1 0x23, non-rendering).
+
+        Verified on hardware: E1 23 does NOT render -- it is only a
+        non-rendering buffer / scribble-mode-init (it flips state preset to
+        0x66). Its per-LED color fields are vestigial for driving the display,
+        so this emits all-zero records. All colors render through grouped
+        E1 26 paints (see construct_scribble_paint).
+
+        Inner byte layout:
+          e1 23 | 01 00 01 50 64 00 | N | <N x 7-byte all-zero records>
+           0  1    2  3  4  5  6  7   8    9 ...
+
+        Each 7-byte record is [H/2, S, V, pad, pad, WW, bright] = all-zero
+        color/white with brightness byte 0x64 (100). inner_len = 9 + 7*N.
+        """
+        msg = bytearray([0xE1, 0x23, 0x01, 0x00, 0x01, 0x50, 0x64, 0x00, num_leds])
+        msg.extend(bytes.fromhex("00000000000064") * num_leds)
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_scribble_paint(
+        self,
+        effect: int = 0x00,
+        direction: int = 0x01,
+        density: int = 0x50,
+        speed: int = 0x64,
+        blink_mode: int = 0x00,
+        h2: int = 0x00,
+        s: int = 0x00,
+        v: int = 0x00,
+        white: int = 0x00,
+        blink_speed: int = 0x64,
+        bitmap_leds: Iterable[int] | None = None,
+        num_leds: int = 0,
+    ) -> bytearray:
+        """Construct a scribble paint command (0xE1 0x26, the render path).
+
+        Sets and displays per-LED color / white / blink / global-effect onto
+        the subset of LEDs selected by a bitmap.
+
+        Inner byte layout:
+          e1 26 | EFFECT | DIR | DENSITY | SPEED | BLINK | H/2 | S | V | 00 | WLVL | BLINKSPD | <bitmap>
+           0  1     2       3      4         5       6      7    8   9   10    11       12        13 ...
+
+        13-byte header then ceil(num_leds/8)-byte bitmap. If bitmap_leds is
+        None, all LEDs (0..num_leds-1) are selected.
+
+        Color vs white are mutually exclusive (caller's responsibility):
+        color mode -> v set, white=0; white mode -> white set, v=0.
+
+        All arguments are plain ints; enum->value conversion is done in the
+        generate/API layer where the type is a known enum (mypy-clean).
+        """
+        density = max(0, min(100, density))
+        speed = max(0, min(100, speed))
+        blink_speed = max(0, min(100, blink_speed))
+        s = max(0, min(100, s))
+        v = max(0, min(100, v))
+        white = max(0, min(100, white))
+        h2 = max(0, min(180, h2))
+        msg = bytearray(
+            [
+                0xE1,
+                0x26,
+                effect,
+                direction,
+                density,
+                speed,
+                blink_mode,
+                h2,
+                s,
+                v,
+                0x00,
+                white,
+                blink_speed,
+            ]
+        )
+        indices = range(num_leds) if bitmap_leds is None else bitmap_leds
+        msg.extend(self._scribble_bitmap(indices, num_leds))
         return self.construct_wrapped_message(
             msg, inner_pre_constructed=True, version=0x02
         )
