@@ -777,7 +777,7 @@ class LEDENETDevice:
         self._device_config = self._protocol.parse_strip_setting(msg)
         _LOGGER.debug("%s: device_config: %s", self.ipaddr, self._device_config)
 
-    def process_state_response(self, rx: bytes) -> bool:
+    def process_state_response(self, rx: bytes | bytearray) -> bool:
         """Process a state change message."""
         assert self._protocol is not None
         if not self._protocol.is_valid_state_response(rx):
@@ -789,7 +789,7 @@ class LEDENETDevice:
             return False
         return self._process_valid_state_response(rx)
 
-    def _process_valid_state_response(self, rx: bytes) -> bool:
+    def _process_valid_state_response(self, rx: bytes | bytearray) -> bool:
         assert self._protocol is not None
         raw_state: LEDENETOriginalRawState | LEDENETRawState = (
             self._protocol.named_raw_state(rx)
@@ -1249,7 +1249,7 @@ class LEDENETDevice:
 
     def _set_protocol_from_msg(
         self,
-        full_msg: bytes,
+        full_msg: bytes | bytearray,
         fallback_protocol: str,
     ) -> None:
         self._model_num = full_msg[1]
