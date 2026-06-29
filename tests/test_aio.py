@@ -4360,10 +4360,7 @@ def test_protocol_extended_custom_state_response_length():
 
 def test_protocol_extended_state_validation_0xB6():
     """The protocols recognise the extended (0xEA 0x81) state response."""
-    ext = bytes(
-        (0xEA, 0x81, 0x01, 0x00, 0xB6, 0x05, 0x23, 0x61, 0x00, 0x64, 0x0F)
-        + (0x00, 0x00, 0x00, 0x64, 0x64, 0x00, 0x00, 0x00, 0x00, 0x83)
-    )
+    ext = bytes.fromhex("ea810100b605236100640f00000064640000000083")
     # ProtocolLEDENET8Byte (used while probing) recognises the extended frame.
     assert ProtocolLEDENET8Byte().is_valid_extended_state_response(ext) is True
     # The dedicated protocol only accepts the extended format.
@@ -4374,21 +4371,43 @@ def test_protocol_extended_state_validation_0xB6():
 
 def test_protocol_extended_state_to_state_white_off():
     """white_brightness of 0 maps to both white channels off."""
-    ext = bytes(
-        (0xEA, 0x81, 0x01, 0x00, 0xB6, 0x05, 0x23, 0x61, 0x00, 0x64, 0x0F)
-        + (0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x83)
-    )
+    ext = bytes.fromhex("ea810100b605236100640f000000ff000000000083")
     result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
     assert result[9] == 0  # warm_white
     assert result[11] == 0  # cool_white
 
 
+def test_protocol_extended_state_to_state_too_short_returns_empty():
+    """A truncated extended frame (< 20 bytes) returns an empty bytestring."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.extended_state_to_state(b"\xea\x81\x01\x00\xb6") == b""
+
+
 def test_protocol_named_raw_state_extended_conversion():
     """named_raw_state converts an extended frame to the standard layout."""
-    ext = bytes(
-        (0xEA, 0x81, 0x01, 0x00, 0xB6, 0x05, 0x23, 0x61, 0x00, 0x64, 0x0F)
-        + (0x00, 0x00, 0x00, 0x64, 0x64, 0x00, 0x00, 0x00, 0x00, 0x83)
-    )
+    ext = bytes.fromhex("ea810100b605236100640f00000064640000000083")
     result = ProtocolLEDENETExtendedCustom().named_raw_state(ext)
     assert result.head == 0x81
     assert result.model_num == 0xB6
+
+
+def test_extended_state_led_count():
+    """extended_state_led_count returns the configured LED count from real captured frames.
+
+    Real captured frames (0xB6 device):
+      LED count = 100: ea 81 01 00 b6 09 24 66 01 64 f0 00 00 00 00 64 05 00 64 00 00 00 20 02 01 00 03
+      LED count =  80: ea 81 01 00 b6 09 23 66 01 64 f0 00 00 00 00 64 05 00 50 00 00 00 20 02 01 00 03
+
+    The LED count byte is at index 18 of the raw extended state buffer.
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    frame_100 = bytes.fromhex("ea810100b60924660164f000000000640500640000002002010003")
+    frame_80 = bytes.fromhex("ea810100b60923660164f000000000640500500000002002010003")
+
+    assert proto.extended_state_led_count(frame_100) == 100
+    assert proto.extended_state_led_count(frame_80) == 80
+
+    # Too-short / invalid frame returns None
+    assert proto.extended_state_led_count(b"\xea\x81\x01") is None
+    assert proto.extended_state_led_count(b"\x00" * 27) is None

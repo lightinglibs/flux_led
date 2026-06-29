@@ -250,6 +250,7 @@ class LEDENETDevice:
         self._device_config: LEDENETAddressableDeviceConfiguration | None = None
         self._last_message: dict[str, bytes] = {}
         self._unavailable_reason: str | None = None
+        self._extended_led_count: int | None = None
 
     def _protocol_probes(
         self,
@@ -488,6 +489,11 @@ class LEDENETDevice:
         if self._device_config is None:
             return None
         return self._device_config.music_segments
+
+    @property
+    def led_count(self) -> int | None:
+        """Return the device's configured LED count (0xB6), or None if unknown."""
+        return self._extended_led_count
 
     @property
     def wiring(self) -> str | None:
@@ -868,6 +874,8 @@ class LEDENETDevice:
     def process_extended_state_response(self, msg: bytes) -> bool:
         """Process and extended state response."""
         assert self._protocol is not None
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            self._extended_led_count = self._protocol.extended_state_led_count(msg)
         self._process_valid_state_response(self._protocol.extended_state_to_state(msg))
         return True
 

@@ -120,6 +120,7 @@ LEDENET_TIME_RESPONSE_LEN = 12  # 10 14 16 01 02 10 26 20 07 00 0f a9
 LEDENET_TIMERS_8BYTE_RESPONSE_LEN = 88
 LEDENET_TIMERS_9BYTE_RESPONSE_LEN = 94
 LEDENET_TIMERS_SOCKET_RESPONSE_LEN = 100
+LEDENET_EXTENDED_STATE_LED_COUNT_POS = 18  # byte index in the raw extended state buffer
 
 MSG_ORIGINAL_POWER_STATE = "original_power_state"
 MSG_ORIGINAL_STATE = "original_state"
@@ -508,11 +509,11 @@ class ProtocolBase:
     def is_valid_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if a state response is valid."""
 
-    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_extended_state_response(self, raw_state: bytes | bytearray) -> bool:
         return False
 
     @abstractmethod
-    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+    def extended_state_to_state(self, raw_state: bytes | bytearray) -> bytes:
         """Convert an extended state response to a state response."""
 
     def is_checksum_correct(self, msg: bytes | bytearray) -> bool:
@@ -1023,7 +1024,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a message is the start of a state response."""
         return _message_type_from_start_of_msg(data) == MSG_POWER_STATE
 
-    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_extended_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if this is an extended state response (0xEA 0x81 format).
 
         The 0xB6 device replies only with this format, so probing must
@@ -1444,11 +1445,11 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         """The name of the protocol."""
         return PROTOCOL_LEDENET_25BYTE
 
-    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_extended_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if a state response is valid."""
         return raw_state[0] == 0xEA and raw_state[1] == 0x81 and len(raw_state) >= 20
 
-    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+    def extended_state_to_state(self, raw_state: bytes | bytearray) -> bytes:
         """Convert an extended state response to a state response."""
         # pos  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19
         #     EA  81  01  10  35  0A  23  61  01  50  0F  3C  64  64  00  64  00  00  00  00
@@ -1622,14 +1623,14 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         """The length of the query response (extended state, 21 bytes)."""
         return LEDENET_EXTENDED_STATE_RESPONSE_LEN
 
-    def is_valid_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if a state response is valid.
 
         This protocol ONLY accepts the extended state format (0xEA 0x81).
         """
         return self.is_valid_extended_state_response(raw_state)
 
-    def named_raw_state(self, raw_state: bytes) -> LEDENETRawState:
+    def named_raw_state(self, raw_state: bytes | bytearray) -> LEDENETRawState:
         """Convert raw_state to a namedtuple.
 
         The extended state format (0xEA 0x81) is converted to the standard
@@ -1639,7 +1640,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             raw_state = self.extended_state_to_state(raw_state)
         return LEDENETRawState(*raw_state)
 
-    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+    def extended_state_to_state(self, raw_state: bytes | bytearray) -> bytes:
         """Convert extended state to standard state format.
 
         For this protocol, the extended state mode (position 8) always contains
@@ -1702,6 +1703,12 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
                 check_sum,
             )
         )
+
+    def extended_state_led_count(self, raw_state: bytes) -> int | None:
+        """Return the configured LED count from an extended state response, or None."""
+        if not self.is_valid_extended_state_response(raw_state):
+            return None
+        return raw_state[LEDENET_EXTENDED_STATE_LED_COUNT_POS]
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

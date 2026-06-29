@@ -1463,6 +1463,27 @@ class TestLight(unittest.TestCase):
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
     @patch("flux_led.WifiLedBulb.connect")
+    def test_determine_protocol_invalid_response_raises(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """If no probe yields a valid (standard or extended) state, raise.
+
+        Exercises the ``not (is_valid_state_response or
+        is_valid_extended_state_response)`` branch (the extended check is the
+        0xB6 addition) and the final 'Cannot determine protocol' raise.
+        """
+
+        def read_data(expected):
+            # Non-0xEA, non-state garbage: fails both validators for every probe.
+            return bytearray(b"\x99" * expected)
+
+        mock_read.side_effect = read_data
+        with self.assertRaisesRegex(Exception, "Cannot determine protocol"):
+            flux_led.WifiLedBulb("192.168.1.199")
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
     def test_rgbcw_bulb_v9(self, mock_connect, mock_read, mock_send):
         calls = 0
 
