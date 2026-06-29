@@ -40,7 +40,12 @@ from flux_led.const import (
     ScribbleLED,
     WhiteChannelType,
 )
-from flux_led.fluxled import processSetTimerArgs, processSetTimerArgsExtended
+from flux_led.fluxled import (
+    _reconcile_scribble_led_count,
+    processCustomArgs,
+    processSetTimerArgs,
+    processSetTimerArgsExtended,
+)
 from flux_led.protocol import (
     LEDENET_EXTENDED_STATE_RESPONSE_LEN,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
@@ -6408,3 +6413,213 @@ def test_led_timer_standard_str_color():
     assert "19:00" in s
     assert "Sa" in s
     assert "Su" in s
+
+
+# ---------------------------------------------------------------------------
+# CLI scribble parsing tests (PR5)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_run_length_expansion():
+    """processCustomArgs scribble: '10xred 10xgreen 60xoff' -> 80 ScribbleLEDs."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "10xred 10xgreen 60xoff"))
+    assert result is not None
+    assert result["mode"] == "scribble"
+    assert result["effect"] == ScribbleEffect.STATIC.value
+    leds = result["leds"]
+    assert len(leds) == 80
+    # first 10: red
+    for led in leds[:10]:
+        assert led.rgb == (255, 0, 0)
+        assert led.white is None
+    # next 10: green
+    for led in leds[10:20]:
+        assert led.rgb == (0, 128, 0) or led.rgb == (0, 255, 0) or led.rgb[0] == 0
+        assert led.white is None
+    # last 60: off
+    for led in leds[20:]:
+        assert led.rgb is None
+        assert led.white is None
+
+
+def test_cli_scribble_white_led():
+    """processCustomArgs scribble: 'w100' -> one white LED with white=100."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "w100"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white == 100
+
+
+def test_cli_scribble_plain_red():
+    """processCustomArgs scribble: 'red' -> one red ScribbleLED."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is not None
+    assert leds[0].rgb[0] == 255  # red channel
+    assert leds[0].white is None
+
+
+def test_cli_scribble_off_led():
+    """processCustomArgs scribble: 'off' -> one off ScribbleLED."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "off"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white is None
+
+
+def test_cli_scribble_malformed_token():
+    """processCustomArgs scribble: malformed token -> parser.error called."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "static", "notacolor!!!"))
+
+
+def test_cli_scribble_trailing_kvargs():
+    """processCustomArgs scribble: trailing key=value args are parsed correctly."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("scribble", "flowing", "5xred speed=50 dir=r2l blink=fast blinkspeed=75"),
+    )
+    assert result is not None
+    assert result["mode"] == "scribble"
+    assert result["effect"] == ScribbleEffect.FLOWING.value
+    assert result["speed"] == 50
+    assert result["direction"] == ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value
+    leds = result["leds"]
+    assert len(leds) == 5
+    # blink=fast and blinkspeed=75 should be baked into each LED
+    for led in leds:
+        assert led.blink_mode == ScribbleBlinkMode.FAST
+        assert led.blink_speed == 75
+
+
+def test_cli_scribble_effect_mapping():
+    """processCustomArgs scribble: all effect names map correctly."""
+    parser = OptionParser()
+    effect_map = {
+        "static": ScribbleEffect.STATIC.value,
+        "flowing": ScribbleEffect.FLOWING.value,
+        "twinkling": ScribbleEffect.TWINKLING_STARS.value,
+        "stars_wink": ScribbleEffect.STARS_WINK.value,
+        "accumulate": ScribbleEffect.ACCUMULATE.value,
+    }
+    for name, expected_value in effect_map.items():
+        result = processCustomArgs(parser, ("scribble", name, "red"))
+        assert result is not None, f"Failed for effect {name}"
+        assert result["effect"] == expected_value, f"Wrong value for effect {name}"
+
+
+def test_cli_scribble_white_run_length():
+    """processCustomArgs scribble: '3xw50' -> 3 white LEDs at level 50."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "3xw50"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 3
+    for led in leds:
+        assert led.rgb is None
+        assert led.white == 50
+
+
+def test_cli_scribble_off_run_length():
+    """processCustomArgs scribble: '5xoff' -> 5 off ScribbleLEDs."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "5xoff"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 5
+    for led in leds:
+        assert led.rgb is None
+        assert led.white is None
+
+
+def test_cli_scribble_default_fields():
+    """processCustomArgs scribble: returned dict has density and direction defaults."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red"))
+    assert result is not None
+    assert "density" in result
+    assert "direction" in result
+    assert result["density"] == 80
+    assert result["direction"] == ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value
+
+
+def test_cli_scribble_color_name_starting_with_w():
+    """processCustomArgs scribble: 'white' parses to a color LED, not a white-level token."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "white"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb == (255, 255, 255)
+    assert leds[0].white is None
+
+
+def test_cli_scribble_wheat_color_name():
+    """processCustomArgs scribble: 'wheat' parses as a color LED (not a white token)."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "wheat"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is not None
+    assert leds[0].white is None
+
+
+def test_cli_scribble_white_level_still_works():
+    """processCustomArgs scribble: 'w50' still parses as white level 50."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "w50"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white == 50
+
+
+def test_reconcile_scribble_led_count_pad():
+    """_reconcile_scribble_led_count pads the tail with off-LEDs to reach device count."""
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 10
+    result = _reconcile_scribble_led_count(leds, 80)
+    assert len(result) == 80
+    # first 10 keep the red color
+    for led in result[:10]:
+        assert led.rgb == (255, 0, 0)
+    # remaining 70 are off
+    for led in result[10:]:
+        assert led.rgb is None
+        assert led.white is None
+
+
+def test_reconcile_scribble_led_count_truncate():
+    """_reconcile_scribble_led_count truncates to device count when too many."""
+    leds = [ScribbleLED(rgb=(0, 0, 255))] * 90
+    result = _reconcile_scribble_led_count(leds, 80)
+    assert len(result) == 80
+    for led in result:
+        assert led.rgb == (0, 0, 255)
+
+
+def test_reconcile_scribble_led_count_none_device():
+    """_reconcile_scribble_led_count returns leds unchanged when device count is None."""
+    leds = [ScribbleLED(rgb=(0, 255, 0))] * 5
+    result = _reconcile_scribble_led_count(leds, None)
+    assert result is leds
+
+
+def test_reconcile_scribble_led_count_exact_match():
+    """_reconcile_scribble_led_count returns leds unchanged when count matches."""
+    leds = [ScribbleLED(rgb=(0, 255, 0))] * 80
+    result = _reconcile_scribble_led_count(leds, 80)
+    assert len(result) == 80
