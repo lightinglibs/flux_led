@@ -546,39 +546,102 @@ def _parse_scribble_led_token(
     blink_mode: ScribbleBlinkMode,
     blink_speed: int,
 ) -> ScribbleLED:
-    """Parse a single LED value token (without run-length prefix) into a ScribbleLED."""
-    token_lower = token.lower()
+    """Parse a single LED value token into a ScribbleLED.
+
+    Accepts an optional per-token blink suffix using '/' as separator:
+    ``<value>[/<blinkmode>[/<blinkspeed>]]``
+
+    ``<value>`` is a color name/hex/r,g,b, a white-level ``w<level>``, or
+    ``off``.  ``<blinkmode>`` is ``none|slow|fast``; ``<blinkspeed>`` is
+    0-100.  A per-token blink suffix overrides the caller-supplied global
+    blink_mode / blink_speed defaults.
+    """
+    # Split off optional /blinkmode[/blinkspeed] suffix.
+    # '/' cannot appear in color names (hex uses only hex digits; r,g,b uses
+    # commas; color names are plain words), so splitting on '/' is unambiguous.
+    parts = token.split("/")
+    value_part = parts[0]
+    if len(parts) > 1:
+        # Per-token blink override present
+        blink_part = parts[1].lower()
+        if blink_part not in _SCRIBBLE_BLINK_NAMES:
+            parser.error(
+                f"Invalid blink mode '{parts[1]}' in token '{token}'. "
+                f"Use none, slow, or fast."
+            )
+            raise SystemExit(1)
+        blink_mode = _SCRIBBLE_BLINK_NAMES[blink_part]
+        if len(parts) > 2:
+            try:
+                blink_speed = int(parts[2])
+            except ValueError:
+                parser.error(
+                    f"Invalid blink speed '{parts[2]}' in token '{token}'. "
+                    f"Must be an integer."
+                )
+                raise SystemExit(1)
+        if len(parts) > 3:
+            parser.error(f"Too many '/' separators in token '{token}'.")
+            raise SystemExit(1)
+
+    token_lower = value_part.lower()
     if token_lower == "off":
-        return ScribbleLED(rgb=None, white=None, blink_mode=blink_mode, blink_speed=blink_speed)
+        return ScribbleLED(
+            rgb=None, white=None, blink_mode=blink_mode, blink_speed=blink_speed
+        )
     # White-level token: 'w' followed by DIGITS ONLY (e.g. w50). A token like
     # 'white' or 'wheat' is a color name, so it falls through to the color parser.
     white_match = _WHITE_LEVEL_RE.match(token_lower)
     if white_match:
         level = int(white_match.group(1))
-        return ScribbleLED(rgb=None, white=level, blink_mode=blink_mode, blink_speed=blink_speed)
+        return ScribbleLED(
+            rgb=None, white=level, blink_mode=blink_mode, blink_speed=blink_speed
+        )
     # Color token
-    c = utils.color_object_to_tuple(token)
+    c = utils.color_object_to_tuple(value_part)
     if c is None or len(c) < 3:
         parser.error(
-            f"Invalid color token '{token}'. Use a color name, hex value, or r,g,b triple."
+            f"Invalid color token '{value_part}'. Use a color name, hex value, or r,g,b triple."
         )
         raise SystemExit(1)
-    return ScribbleLED(rgb=(c[0], c[1], c[2]), white=None, blink_mode=blink_mode, blink_speed=blink_speed)
+    return ScribbleLED(
+        rgb=(c[0], c[1], c[2]),
+        white=None,
+        blink_mode=blink_mode,
+        blink_speed=blink_speed,
+    )
 
 
 def _process_scribble_args(
     parser: OptionParser,
     args: Any,
 ) -> dict[str, Any] | None:
-    """Parse scribble-mode args: ('scribble', <effect>, '<per-led-spec>')."""
+    """Parse scribble-mode args: ('scribble', <effect>, '<per-led-spec>').
+
+    ``<effect>`` may be a named effect (static/flowing/twinkling/stars_wink/
+    accumulate) OR a raw integer 0-8.
+    """
     effect_name = args[1].lower() if len(args) > 1 else "static"
-    if effect_name not in _SCRIBBLE_EFFECT_NAMES:
-        parser.error(
-            f"Unknown scribble effect '{effect_name}'. "
-            f"Valid: {', '.join(_SCRIBBLE_EFFECT_NAMES)}."
-        )
-        return None
-    effect = _SCRIBBLE_EFFECT_NAMES[effect_name]
+    if effect_name in _SCRIBBLE_EFFECT_NAMES:
+        effect_id: int = _SCRIBBLE_EFFECT_NAMES[effect_name].value
+    else:
+        # Try numeric id
+        try:
+            effect_id = int(effect_name)
+        except ValueError:
+            parser.error(
+                f"Unknown scribble effect '{effect_name}'. "
+                f"Valid names: {', '.join(_SCRIBBLE_EFFECT_NAMES)}; "
+                f"or a number 0-8."
+            )
+            return None
+        if not 0 <= effect_id <= 8:
+            parser.error(
+                f"Scribble effect id {effect_id} out of range. "
+                f"Valid names: {', '.join(_SCRIBBLE_EFFECT_NAMES)}; "
+                f"or a number 0-8."
+            )
+            return None
 
     spec_str = args[2].strip() if len(args) > 2 else ""
 
@@ -588,6 +651,7 @@ def _process_scribble_args(
     direction = ExtendedCustomEffectDirection.LEFT_TO_RIGHT
     blink_mode = ScribbleBlinkMode.NONE
     blink_speed = 100
+    enter_mode = True
 
     # Split spec on whitespace; separate LED tokens from key=value tokens
     all_tokens = spec_str.split()
@@ -629,7 +693,17 @@ def _process_scribble_args(
                 try:
                     blink_speed = int(val)
                 except ValueError:
-                    parser.error(f"Invalid blinkspeed value '{val}'. Must be an integer.")
+                    parser.error(
+                        f"Invalid blinkspeed value '{val}'. Must be an integer."
+                    )
+                    return None
+            elif key == "enter":
+                if val.lower() == "true":
+                    enter_mode = True
+                elif val.lower() == "false":
+                    enter_mode = False
+                else:
+                    parser.error(f"Invalid enter value '{val}'. Use true or false.")
                     return None
             else:
                 parser.error(f"Unknown scribble option '{key}'.")
@@ -655,11 +729,12 @@ def _process_scribble_args(
 
     return {
         "mode": "scribble",
-        "effect": effect.value,
+        "effect": effect_id,
         "leds": leds,
         "direction": direction.value,
         "density": density,
         "speed": speed,
+        "enter_mode": enter_mode,
     }
 
 
@@ -687,6 +762,7 @@ def processCustomArgs(
     density: int = 50,
     direction: str = "l2r",
     colorchange: bool = False,
+    variant: int | None = None,
 ) -> dict[str, Any] | None:
     """Process custom pattern arguments.
 
@@ -816,8 +892,14 @@ def processCustomArgs(
             parser.error(f"Invalid direction: {direction}. Use l2r or r2l")
             return None
 
-        # Option value
-        option_value = 0x01 if colorchange else 0x00
+        # Option value: --variant takes precedence; fall back to --colorchange.
+        if variant is not None:
+            if not 0 <= variant <= 2:
+                parser.error(f"Invalid --variant {variant}. Must be 0, 1, or 2.")
+                return None
+            option_value = variant
+        else:
+            option_value = 0x01 if colorchange else 0x00
 
         return {
             "mode": "extended",
@@ -982,9 +1064,9 @@ def parseArgs() -> tuple[Values, Any]:
         + "TYPE: jump, gradual, strobe (standard), or extended pattern names "
         + "(wave, meteor, breathe, etc. for 0xB6 devices), or 'segments' for static colors, "
         + "or 'scribble' for per-LED colors (0xB6 devices). "
-        + "SPEED is percent (0-100) (for scribble, use the effect name instead). "
+        + "SPEED is percent (0-100) (for scribble, use the effect name or 0-8 id instead). "
         + "COLORLIST is a space-separated list of color names, hex values, or RGB triples. "
-        + "Use --density, --direction, --colorchange for extended pattern options.",
+        + "Use --density, --direction, --colorchange, --variant 0|1|2 for extended pattern options.",
     )
     parser.add_option_group(mode_group)
 
@@ -1008,7 +1090,16 @@ def parseArgs() -> tuple[Values, Any]:
         action="store_true",
         dest="colorchange",
         default=False,
-        help="Enable color change option for extended effect",
+        help="Enable color change option for extended effect (equivalent to --variant 1)",
+    )
+    other_group.add_option(
+        "--variant",
+        dest="variant",
+        default=None,
+        type="int",
+        metavar="VARIANT",
+        help="Extended effect option variant: 0, 1, or 2 (overrides --colorchange). "
+        "Use with -C <extended-pattern> SPEED COLORLIST.",
     )
 
     parser.add_option(
@@ -1105,9 +1196,9 @@ def parseArgs() -> tuple[Values, Any]:
         print("\nSegment colors (-C segments, 0xB6 devices only):")
         print("  segments - Set individual segment colors (up to 20)")
         print("\nPer-LED scribble (-C scribble, 0xB6 devices only):")
-        print("  scribble <effect> \"<per-led-spec>\"  - Set per-LED colors/blink")
+        print('  scribble <effect> "<per-led-spec>"  - Set per-LED colors/blink')
         print("  Effects: static, flowing, twinkling, stars_wink, accumulate")
-        print("  Example: -C scribble static \"10xred 70xoff\"")
+        print('  Example: -C scribble static "10xred 70xoff"')
         sys.exit(0)
 
     if options.listcolors:
@@ -1148,6 +1239,7 @@ def parseArgs() -> tuple[Values, Any]:
             density=options.density,
             direction=options.direction,
             colorchange=options.colorchange,
+            variant=options.variant,
         )
 
     if options.color:
@@ -1344,15 +1436,16 @@ async def _async_run_commands(
         elif mode == "scribble":
             # Per-LED scribble configuration
             if not bulb.supports_scribble:
-                buf_in(
-                    f"{bulb.model} does not support the scribble (per-LED) feature."
-                )
+                buf_in(f"{bulb.model} does not support the scribble (per-LED) feature.")
             else:
                 leds = custom["leds"]
-                effect = ScribbleEffect(custom["effect"])
+                # Pass the raw int effect id; the API accepts ScribbleEffect|int
+                # so unnamed ids (3, 4, 6, 7) work without raising ValueError.
+                effect_id_raw: int = custom["effect"]
                 direction = ExtendedCustomEffectDirection(custom["direction"])
                 density = custom["density"]
                 speed = custom["speed"]
+                scribble_enter_mode: bool = custom.get("enter_mode", True)
                 # Reconcile parsed LED count with the device's configured count:
                 # pad the tail with off-LEDs or truncate so the upload is exactly
                 # the device's LED count (avoids the API's hard count check).
@@ -1368,17 +1461,23 @@ async def _async_run_commands(
                         )
                     )
                     leds = _reconcile_scribble_led_count(leds, device_count)
+                # Build display name for the effect id
+                try:
+                    effect_display = ScribbleEffect(effect_id_raw).name.lower()
+                except ValueError:
+                    effect_display = str(effect_id_raw)
                 buf_in(
                     f"Setting scribble: {len(leds)} LEDs, "
-                    f"effect={effect.name.lower()}, "
+                    f"effect={effect_display}, "
                     f"speed={speed}, density={density}"
                 )
                 await bulb.async_set_scribble(
                     leds,
-                    effect=effect,
+                    effect=effect_id_raw,
                     direction=direction,
                     density=density,
                     speed=speed,
+                    enter_mode=scribble_enter_mode,
                 )
 
     elif options.preset is not None:

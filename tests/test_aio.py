@@ -6187,7 +6187,6 @@ def test_led_timer_extended_from_bytes_truncated():
     assert consumed == 5  # Returns what's available
 
 
-
 def test_cli_process_set_timer_args_extended_inactive():
     """Test CLI parsing for inactive extended timer."""
     parser = OptionParser()
@@ -6623,3 +6622,255 @@ def test_reconcile_scribble_led_count_exact_match():
     leds = [ScribbleLED(rgb=(0, 255, 0))] * 80
     result = _reconcile_scribble_led_count(leds, 80)
     assert len(result) == 80
+
+
+# ---------------------------------------------------------------------------
+# Gap 1 — Numeric effect id
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_numeric_effect_valid():
+    """processCustomArgs scribble: numeric effect id 4 -> effect==4 in result."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "4", "80xred"))
+    assert result is not None
+    assert result["mode"] == "scribble"
+    assert result["effect"] == 4
+
+
+def test_cli_scribble_numeric_effect_zero():
+    """processCustomArgs scribble: numeric effect id 0 -> effect==0 (same as static)."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "0", "red"))
+    assert result is not None
+    assert result["effect"] == 0
+
+
+def test_cli_scribble_numeric_effect_max():
+    """processCustomArgs scribble: numeric effect id 8 -> effect==8 (same as accumulate)."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "8", "red"))
+    assert result is not None
+    assert result["effect"] == 8
+
+
+def test_cli_scribble_named_effect_still_works():
+    """processCustomArgs scribble: named effect 'flowing' -> effect==1."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "flowing", "red"))
+    assert result is not None
+    assert result["effect"] == ScribbleEffect.FLOWING.value
+
+
+def test_cli_scribble_numeric_effect_out_of_range():
+    """processCustomArgs scribble: effect id 9 -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "9", "red"))
+
+
+def test_cli_scribble_numeric_effect_garbage():
+    """processCustomArgs scribble: garbage effect name -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "boguseffect", "red"))
+
+
+# ---------------------------------------------------------------------------
+# Gap 2 — Per-LED blink syntax  (<value>[/<blinkmode>[/<blinkspeed>]])
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_per_led_blink_suffix_fast():
+    """processCustomArgs scribble: 'red/fast/80' -> FAST blink_mode, speed 80."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red/fast/80"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].blink_mode == ScribbleBlinkMode.FAST
+    assert leds[0].blink_speed == 80
+
+
+def test_cli_scribble_per_led_blink_suffix_run_length():
+    """processCustomArgs scribble: '40xred/fast/80 40xgreen' -> first 40 FAST, last 40 NONE."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser, ("scribble", "static", "40xred/fast/80 40xgreen")
+    )
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 80
+    for led in leds[:40]:
+        assert led.blink_mode == ScribbleBlinkMode.FAST
+        assert led.blink_speed == 80
+    for led in leds[40:]:
+        assert led.blink_mode == ScribbleBlinkMode.NONE
+
+
+def test_cli_scribble_per_led_blink_suffix_white():
+    """processCustomArgs scribble: 'w50/slow' -> white=50 with SLOW blink."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "w50/slow"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].white == 50
+    assert leds[0].blink_mode == ScribbleBlinkMode.SLOW
+
+
+def test_cli_scribble_per_led_blink_suffix_off():
+    """processCustomArgs scribble: 'off/fast' -> off LED with FAST blink."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "off/fast"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white is None
+    assert leds[0].blink_mode == ScribbleBlinkMode.FAST
+
+
+def test_cli_scribble_per_led_blink_overrides_global():
+    """processCustomArgs scribble: per-token blink overrides global blink= setting."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("scribble", "static", "red/fast/80 blue blink=slow blinkspeed=30"),
+    )
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 2
+    # 'red/fast/80' overrides global
+    assert leds[0].blink_mode == ScribbleBlinkMode.FAST
+    assert leds[0].blink_speed == 80
+    # 'blue' inherits global blink=slow blinkspeed=30
+    assert leds[1].blink_mode == ScribbleBlinkMode.SLOW
+    assert leds[1].blink_speed == 30
+
+
+def test_cli_scribble_per_led_blink_mode_only():
+    """processCustomArgs scribble: 'green/slow' -> SLOW blink, default speed."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "green/slow"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].blink_mode == ScribbleBlinkMode.SLOW
+
+
+def test_cli_scribble_per_led_blink_bogus_mode():
+    """processCustomArgs scribble: 'red/bogus' -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "static", "red/bogus"))
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 — enter=true|false token
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_enter_false():
+    """processCustomArgs scribble: 'enter=false' -> enter_mode False in result."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "80xred enter=false"))
+    assert result is not None
+    assert result["enter_mode"] is False
+
+
+def test_cli_scribble_enter_true_explicit():
+    """processCustomArgs scribble: 'enter=true' -> enter_mode True in result."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red enter=true"))
+    assert result is not None
+    assert result["enter_mode"] is True
+
+
+def test_cli_scribble_enter_default_true():
+    """processCustomArgs scribble: absent enter= token -> enter_mode defaults to True."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red"))
+    assert result is not None
+    assert result["enter_mode"] is True
+
+
+def test_cli_scribble_enter_invalid():
+    """processCustomArgs scribble: 'enter=maybe' -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "static", "red enter=maybe"))
+
+
+# ---------------------------------------------------------------------------
+# Gap 4 — processCustomArgs variant parameter
+# ---------------------------------------------------------------------------
+
+
+def test_processCustomArgs_variant_2():
+    """processCustomArgs: variant=2 -> option==2 in extended result."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        variant=2,
+    )
+    assert result is not None
+    assert result["mode"] == "extended"
+    assert result["option"] == 2
+
+
+def test_processCustomArgs_variant_1():
+    """processCustomArgs: variant=1 -> option==1."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        variant=1,
+    )
+    assert result is not None
+    assert result["option"] == 1
+
+
+def test_processCustomArgs_variant_0():
+    """processCustomArgs: variant=0 -> option==0."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        variant=0,
+    )
+    assert result is not None
+    assert result["option"] == 0
+
+
+def test_processCustomArgs_variant_out_of_range():
+    """processCustomArgs: variant=5 -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("wave", "60", "red green"), variant=5)
+
+
+def test_processCustomArgs_colorchange_still_works():
+    """processCustomArgs: colorchange=True without variant -> option==1 (unchanged)."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        colorchange=True,
+    )
+    assert result is not None
+    assert result["option"] == 1
+
+
+def test_processCustomArgs_variant_overrides_colorchange():
+    """processCustomArgs: variant=2 with colorchange=True -> option==2 (variant wins)."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        colorchange=True,
+        variant=2,
+    )
+    assert result is not None
+    assert result["option"] == 2
