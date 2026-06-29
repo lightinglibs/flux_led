@@ -16,6 +16,7 @@ from flux_led.aioprotocol import AIOLEDENETProtocol
 from flux_led.aioscanner import AIOBulbScanner, LEDENETDiscovery
 from flux_led.const import (
     COLOR_MODE_CCT,
+    COLOR_MODE_DIM,
     COLOR_MODE_RGB,
     COLOR_MODE_RGBW,
     COLOR_MODE_RGBWW,
@@ -4294,3 +4295,53 @@ async def test_setup_0x35_with_version_num_10(
         )
     )
     assert light.white_active is True
+
+
+@pytest.mark.asyncio
+async def test_setup_0xB6_surplife(mock_aio_protocol):
+    """0xB6 Surplife is recognised via the reused 25-byte protocol.
+
+    The device replies only with the extended state format (0xEA 0x81), so this
+    exercises protocol determination from an extended-only response (the case
+    that previously failed with "Cannot determine protocol").
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 00 00 CS
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x00,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
+    assert "Surplife" in light.model

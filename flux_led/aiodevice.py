@@ -732,7 +732,18 @@ class AIOWifiLedBulb(LEDENETDevice):
             self._process_state_futures()
         elif self._protocol.is_valid_extended_state_response(msg):
             self._last_message["extended_state"] = msg
+            # Devices like 0xB6 reply only with extended state, so the pending
+            # protocol determination must be resolved here too.
+            if (
+                self._determine_protocol_future
+                and not self._determine_protocol_future.done()
+            ):
+                self._set_protocol_from_msg(msg, self._protocol.name)
+                self._determine_protocol_future.set_result(True)
             self.process_extended_state_response(msg)
+            # Extended state carries both state and power information.
+            self._process_state_futures()
+            self._process_power_futures()
         elif self._protocol.is_valid_power_state_response(msg):
             self._last_message["power_state"] = msg
             self.process_power_state_response(msg)

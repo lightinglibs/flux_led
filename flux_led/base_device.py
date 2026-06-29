@@ -1252,9 +1252,15 @@ class LEDENETDevice:
         full_msg: bytes,
         fallback_protocol: str,
     ) -> None:
-        self._model_num = full_msg[1]
+        if len(full_msg) >= 20 and full_msg[0] == 0xEA and full_msg[1] == 0x81:
+            # Extended state format (0xEA 0x81): model at byte 4, version at byte 5.
+            self._model_num = full_msg[4]
+            version_num = full_msg[5]
+        else:
+            # Standard state format (0x81): model at byte 1, version at byte 10.
+            self._model_num = full_msg[1]
+            version_num = full_msg[10] if len(full_msg) > 10 else 1
         self._model_data = get_model(self._model_num, fallback_protocol)
-        version_num = full_msg[10] if len(full_msg) > 10 else 1
         self.setProtocol(self._model_data.protocol_for_version_num(version_num))
 
     def _generate_preset_pattern(
