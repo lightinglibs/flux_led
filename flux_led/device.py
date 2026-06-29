@@ -276,8 +276,17 @@ class WifiLedBulb(LEDENETDevice):
                 # cannot process, recycle the connection
                 self.close()
                 continue
-            full_msg = rx + self._read_msg(protocol.state_response_length - read_bytes)
-            if not protocol.is_valid_state_response(full_msg):
+            # Extended-state-only devices (e.g. 0xB6) reply with 0xEA 0x81 and
+            # need 21 bytes total instead of the standard state length.
+            if rx[0] == 0xEA and rx[1] == 0x81:
+                additional_bytes = 19  # 21 - 2 bytes already read
+            else:
+                additional_bytes = protocol.state_response_length - read_bytes
+            full_msg = rx + self._read_msg(additional_bytes)
+            if not (
+                protocol.is_valid_state_response(full_msg)
+                or protocol.is_valid_extended_state_response(full_msg)
+            ):
                 self.close()
                 continue
             assert isinstance(full_msg, bytearray)

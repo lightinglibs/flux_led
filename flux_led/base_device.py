@@ -90,6 +90,7 @@ from .protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_CCT,
     PROTOCOL_LEDENET_CCT_WRAPPED,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_ORIGINAL_RGBW,
@@ -110,6 +111,7 @@ from .protocol import (
     ProtocolLEDENETAddressableChristmas,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETOriginal,
     ProtocolLEDENETOriginalCCT,
     ProtocolLEDENETOriginalRGBW,
@@ -143,6 +145,7 @@ PROTOCOL_TYPES = (
     | ProtocolLEDENET9ByteAutoOn
     | ProtocolLEDENET9ByteDimmableEffects
     | ProtocolLEDENET25Byte
+    | ProtocolLEDENETExtendedCustom
     | ProtocolLEDENETAddressableA1
     | ProtocolLEDENETAddressableA2
     | ProtocolLEDENETAddressableA3
@@ -187,6 +190,7 @@ PROTOCOL_NAME_TO_CLS = {
     PROTOCOL_LEDENET_9BYTE_AUTO_ON: ProtocolLEDENET9ByteAutoOn,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS: ProtocolLEDENET9ByteDimmableEffects,
     PROTOCOL_LEDENET_25BYTE: ProtocolLEDENET25Byte,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM: ProtocolLEDENETExtendedCustom,
     PROTOCOL_LEDENET_ADDRESSABLE_A3: ProtocolLEDENETAddressableA3,
     PROTOCOL_LEDENET_ADDRESSABLE_A2: ProtocolLEDENETAddressableA2,
     PROTOCOL_LEDENET_ADDRESSABLE_A1: ProtocolLEDENETAddressableA1,
@@ -637,6 +641,11 @@ class LEDENETDevice:
         if self.microphone:
             return [*effects, EFFECT_RANDOM, EFFECT_MUSIC]
         return [*effects, EFFECT_RANDOM]
+
+    @property
+    def supports_extended_custom_effects(self) -> bool:
+        """Return True if the device uses the extended custom protocol."""
+        return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
 
     @property
     def effect(self) -> str | None:

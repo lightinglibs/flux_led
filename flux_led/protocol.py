@@ -97,6 +97,7 @@ PROTOCOL_LEDENET_CCT = "LEDENET_CCT"
 PROTOCOL_LEDENET_CCT_WRAPPED = "LEDENET_CCT_WRAPPED"
 PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS = "LEDENET_CHRISTMAS"
 PROTOCOL_LEDENET_25BYTE = "LEDENET_25_BYTE"
+PROTOCOL_LEDENET_EXTENDED_CUSTOM = "LEDENET_EXTENDED_CUSTOM"
 
 TRANSITION_BYTES = {
     TRANSITION_JUMP: 0x3B,
@@ -109,6 +110,7 @@ LEDNET_MUSIC_MODE_RESPONSE_LEN = 13  # 72 01 26 01 00 00 00 00 00 00 64 64 62
 LEDENET_POWER_RESTORE_RESPONSE_LEN = 7
 LEDENET_ORIGINAL_STATE_RESPONSE_LEN = 11
 LEDENET_STATE_RESPONSE_LEN = 14
+LEDENET_EXTENDED_STATE_RESPONSE_LEN = 21
 LEDENET_POWER_RESPONSE_LEN = 4
 LEDENET_ADDRESSABLE_STATE_RESPONSE_LEN = 25
 LEDENET_A1_DEVICE_CONFIG_RESPONSE_LEN = 12
@@ -1599,6 +1601,107 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
                 version=0x02,
             )
         ]
+
+
+class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
+    """Protocol for the 0xB6 Surplife device (extended state + custom effects).
+
+    This device only ever responds with the extended state format (0xEA 0x81)
+    and uses an HSV+W color format. It reuses ProtocolLEDENET25Byte for the
+    standard command set; dedicated custom-effect and timer support is added in
+    follow-up changes.
+    """
+
+    @property
+    def name(self) -> str:
+        """The name of the protocol."""
+        return PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    @property
+    def state_response_length(self) -> int:
+        """The length of the query response (extended state, 21 bytes)."""
+        return LEDENET_EXTENDED_STATE_RESPONSE_LEN
+
+    def is_valid_state_response(self, raw_state: bytes) -> bool:
+        """Check if a state response is valid.
+
+        This protocol ONLY accepts the extended state format (0xEA 0x81).
+        """
+        return self.is_valid_extended_state_response(raw_state)
+
+    def named_raw_state(self, raw_state: bytes) -> LEDENETRawState:
+        """Convert raw_state to a namedtuple.
+
+        The extended state format (0xEA 0x81) is converted to the standard
+        14-byte layout first so the synchronous state path can parse it.
+        """
+        if self.is_valid_extended_state_response(raw_state):
+            raw_state = self.extended_state_to_state(raw_state)
+        return LEDENETRawState(*raw_state)
+
+    def extended_state_to_state(self, raw_state: bytes) -> bytes:
+        """Convert extended state to standard state format.
+
+        For this protocol, the extended state mode (position 8) always contains
+        the custom effect pattern ID when preset_pattern is 0x25, and a white
+        brightness of 0 (or out-of-range temp) means the white LED is off.
+        """
+        if len(raw_state) < 20:
+            return b""
+
+        model_num = raw_state[4]
+        version_number = raw_state[5]
+        power_state = raw_state[6]
+        preset_pattern = raw_state[7]
+        speed = raw_state[9]
+
+        hue = raw_state[11]
+        saturation = raw_state[12]
+        value = raw_state[13]
+
+        white_temp = raw_state[14]
+        white_brightness = raw_state[15]
+
+        if white_temp > 100 or white_brightness == 0:
+            cool_white = 0
+            warm_white = 0
+        else:
+            levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
+            cool_white = levels.cool_white
+            warm_white = levels.warm_white
+
+        # Convert HSV to RGB
+        h = (hue * 2) / 360
+        s = saturation / 100
+        v = value / 100
+        r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
+        red = min(int(max(0, r_f) * 255), 255)
+        green = min(int(max(0, g_f) * 255), 255)
+        blue = min(int(max(0, b_f) * 255), 255)
+
+        # mode carries the effect pattern ID in custom pattern mode (0x25)
+        mode = raw_state[8] if preset_pattern == 0x25 else 0
+        color_mode = 0
+        check_sum = 0
+
+        return bytes(
+            (
+                raw_state[1],  # Head (0x81)
+                model_num,
+                power_state,
+                preset_pattern,
+                mode,
+                speed,
+                red,
+                green,
+                blue,
+                warm_white,
+                version_number,
+                cool_white,
+                color_mode,
+                check_sum,
+            )
+        )
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

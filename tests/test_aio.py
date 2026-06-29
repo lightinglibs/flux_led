@@ -28,18 +28,22 @@ from flux_led.const import (
     WhiteChannelType,
 )
 from flux_led.protocol import (
+    LEDENET_EXTENDED_STATE_RESPONSE_LEN,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     LEDENETRawState,
     PowerRestoreState,
     PowerRestoreStates,
+    ProtocolLEDENET8Byte,
     ProtocolLEDENET25Byte,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     RemoteConfig,
 )
 from flux_led.scanner import (
@@ -4342,6 +4346,49 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     )
     await task
     assert light.model_num == 0xB6
-    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
     assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
     assert "Surplife" in light.model
+    assert light.supports_extended_custom_effects is True
+
+
+def test_protocol_extended_custom_state_response_length():
+    """ProtocolLEDENETExtendedCustom expects the 21-byte extended state."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.state_response_length == LEDENET_EXTENDED_STATE_RESPONSE_LEN
+
+
+def test_protocol_extended_state_validation_0xB6():
+    """The protocols recognise the extended (0xEA 0x81) state response."""
+    ext = bytes(
+        (0xEA, 0x81, 0x01, 0x00, 0xB6, 0x05, 0x23, 0x61, 0x00, 0x64, 0x0F)
+        + (0x00, 0x00, 0x00, 0x64, 0x64, 0x00, 0x00, 0x00, 0x00, 0x83)
+    )
+    # ProtocolLEDENET8Byte (used while probing) recognises the extended frame.
+    assert ProtocolLEDENET8Byte().is_valid_extended_state_response(ext) is True
+    # The dedicated protocol only accepts the extended format.
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.is_valid_state_response(ext) is True
+    assert proto.is_valid_state_response(bytes((0x81,)) + b"\x00" * 13) is False
+
+
+def test_protocol_extended_state_to_state_white_off():
+    """white_brightness of 0 maps to both white channels off."""
+    ext = bytes(
+        (0xEA, 0x81, 0x01, 0x00, 0xB6, 0x05, 0x23, 0x61, 0x00, 0x64, 0x0F)
+        + (0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x83)
+    )
+    result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
+    assert result[9] == 0  # warm_white
+    assert result[11] == 0  # cool_white
+
+
+def test_protocol_named_raw_state_extended_conversion():
+    """named_raw_state converts an extended frame to the standard layout."""
+    ext = bytes(
+        (0xEA, 0x81, 0x01, 0x00, 0xB6, 0x05, 0x23, 0x61, 0x00, 0x64, 0x0F)
+        + (0x00, 0x00, 0x00, 0x64, 0x64, 0x00, 0x00, 0x00, 0x00, 0x83)
+    )
+    result = ProtocolLEDENETExtendedCustom().named_raw_state(ext)
+    assert result.head == 0x81
+    assert result.model_num == 0xB6
