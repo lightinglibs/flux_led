@@ -49,6 +49,7 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_RED,
     STATE_WARM_WHITE,
     STATIC_MODES,
+    ExtendedCustomEffectPattern,
     WhiteChannelType,
 )
 from .models_db import (
@@ -72,6 +73,7 @@ from .pattern import (
     EFFECT_LIST,
     EFFECT_LIST_DIMMABLE,
     EFFECT_LIST_LEGACY_CCT,
+    EXTENDED_CUSTOM_EFFECT_ID_NAME,
     ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME,
     ORIGINAL_ADDRESSABLE_EFFECT_NAME_ID,
     PresetPattern,
@@ -654,6 +656,13 @@ class LEDENETDevice:
         return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
 
     @property
+    def extended_custom_effect_pattern_list(self) -> list[str] | None:
+        """Return available extended custom effect patterns, or None if not supported."""
+        if not self.supports_extended_custom_effects:
+            return None
+        return [p.name.lower().replace("_", " ") for p in ExtendedCustomEffectPattern]
+
+    @property
     def effect(self) -> str | None:
         """Return the current effect."""
         if self.protocol in CHRISTMAS_EFFECTS_PROTOCOLS:
@@ -667,6 +676,16 @@ class LEDENETDevice:
         mode = self.raw_state.mode
         pattern_code = self.preset_pattern_num
         protocol = self.protocol
+        # Devices with extended custom effects use different pattern names
+        if self.supports_extended_custom_effects and pattern_code == 0x25:
+            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
+        # For 0xB6 segment mode: preset_pattern=0x24 and mode=0x00
+        if (
+            self.supports_extended_custom_effects
+            and pattern_code == 0x24
+            and mode == 0x00
+        ):
+            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)  # Returns "Segments"
         if protocol in OLD_EFFECTS_PROTOCOLS:
             effect_id = (pattern_code << 8) + mode - 99
             return ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.get(effect_id)
@@ -1324,6 +1343,79 @@ class LEDENETDevice:
 
         assert self._protocol is not None
         return self._protocol.construct_custom_effect(rgb_list, speed, transition_type)
+
+    def _generate_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Generate the extended custom effect protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        # Validate pattern_id
+        valid_ids = set(range(1, 25)) | {101, 102}
+        if pattern_id not in valid_ids:
+            raise ValueError(f"Pattern ID must be 1-24 or 101-102, got {pattern_id}")
+
+        # Truncate if more than 8 colors
+        if len(colors) > 8:
+            _LOGGER.warning(
+                "Too many colors in %s, truncating list to %s", len(colors), 8
+            )
+            colors = colors[:8]
+
+        # Require at least one color
+        if len(colors) == 0:
+            raise ValueError("Surplife pattern requires at least one color")
+
+        # Validate color tuples
+        for idx, color in enumerate(colors):
+            if len(color) != 3:
+                raise ValueError(f"Color {idx} must be (R, G, B) tuple")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_extended_custom_effect(
+            pattern_id, colors, speed, density, direction, option
+        )
+
+    def _generate_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Generate custom segment colors protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        # Truncate if more than 20 segments
+        if len(segments) > 20:
+            _LOGGER.warning("Too many segments (%s), truncating to 20", len(segments))
+            segments = segments[:20]
+
+        # Validate color tuples
+        for idx, color in enumerate(segments):
+            if color is None:
+                continue
+            if len(color) != 3:
+                raise ValueError(f"Segment {idx} must be (R, G, B) tuple or None")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_custom_segment_colors(segments)
 
     def _effect_to_pattern(self, effect: str) -> int:
         """Convert an effect to a pattern code."""

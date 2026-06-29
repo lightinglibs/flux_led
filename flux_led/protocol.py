@@ -1679,6 +1679,226 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         if not self.is_valid_extended_state_response(raw_state):
             return None
         return raw_state[LEDENET_EXTENDED_STATE_LED_COUNT_POS]
+    def _rgb_to_hsv_bytes_rgbw(
+        self, r: int, g: int, b: int, white: int = 0
+    ) -> list[int]:
+        """Convert RGBW (0-255) to 5-byte HSVW format for extended effect commands.
+
+        Output format:
+          [H/2, S, V, 0x00, W]
+           0    1  2   3    4
+           |    |  |   |    white LED brightness (0-255)
+           |    |  |   unused (always 0x00)
+           |    |  value/brightness (0-100)
+           |    saturation (0-100)
+           hue divided by 2 (0-180)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+            white: White LED brightness (0-255)
+
+        Returns:
+            5-byte list [H/2, S, V, 0x00, W]
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, white]
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode | int,
+    ) -> list[bytearray]:
+        """Construct level change using 0xE1 0x21 STATIC_FILL command.
+
+        The parent's 0xE0 wrapped command works for RGB but not for CCT/white.
+        This override uses extended custom effect command (0xE1 0x21) with
+        STATIC_FILL pattern (0x66) which supports both RGB and white.
+
+        Inner message format (before wrapping):
+          pos  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
+              E1 21 00 64 66 00 01 32 32 00 00 00 00 00 00 01 HH SS VV 00 WW
+                        |  |  |  |  |  |                    |  |  |  |  |  |
+                        |  |  |  |  |  |                    |  |  |  |  |  white (0-255)
+                        |  |  |  |  |  |                    |  |  |  |  unused
+                        |  |  |  |  |  |                    |  |  |  value (0-100)
+                        |  |  |  |  |  |                    |  |  saturation (0-100)
+                        |  |  |  |  |  |                    |  hue/2 (0-180)
+                        |  |  |  |  |  |                    color count (1)
+                        |  |  |  |  |  reserved (6 bytes, all 0x00)
+                        |  |  |  |  speed (0x32 = 50)
+                        |  |  |  density (0x32 = 50)
+                        |  |  direction (0x01 = L->R)
+                        |  option (0x00 = default)
+                        pattern ID (0x66 = STATIC_FILL)
+
+        Note: Device has single white LED, so warm_white and cool_white
+        are combined into one brightness value.
+        """
+        # STATIC_FILL pattern ID
+        STATIC_FILL = 0x66
+
+        r = red or 0
+        g = green or 0
+        b = blue or 0
+
+        # Combine warm and cool white into single white brightness
+        # (device only has one white LED)
+        w = min((warm_white or 0) + (cool_white or 0), 255)
+
+        # Build extended custom effect command with RGBW support
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                STATIC_FILL,  # Pattern ID
+                0x00,  # Option
+                0x01,  # Direction (L->R)
+                0x32,  # Density (50)
+                0x32,  # Speed (50)
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                0x01,  # Color count (1)
+            ]
+        )
+
+        # Add RGBW color as HSV with white in 5th byte
+        msg.extend(self._rgb_to_hsv_bytes_rgbw(r, g, b, w))
+
+        return [
+            self.construct_wrapped_message(
+                msg, inner_pre_constructed=True, version=0x02
+            )
+        ]
+
+    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
+        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
+
+        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, 0x00]
+
+    def construct_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Construct an extended custom effect command.
+
+        Protocol format:
+          0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
+         e1 21 00 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
+                    |  |  |  |  |                    |  colors (5 bytes each)
+                    |  |  |  |  |                    color count
+                    |  |  |  |  speed (0-100)
+                    |  |  |  density (0-100)
+                    |  |  direction (01=L->R, 02=R->L)
+                    |  option (00=default, 01=color change)
+                    pattern_id (1-24 or 101-102)
+
+        Args:
+            pattern_id: Pattern ID 1-24 or 101-102
+            colors: List of 1-8 RGB color tuples (0-255 per channel)
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: 0x01=L->R, 0x02=R->L (default L->R)
+            option: Pattern-specific option (default 0)
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Clamp values to valid range
+        speed = max(0, min(100, speed))
+        density = max(0, min(100, density))
+
+        # Convert Enum to value if needed
+        if hasattr(pattern_id, "value"):
+            pattern_id = pattern_id.value
+        if hasattr(option, "value"):
+            option = option.value
+        if hasattr(direction, "value"):
+            direction = direction.value
+
+        # Build inner message
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x00,  # Command type
+                0x64,  # Constant (100)
+                pattern_id,
+                option,
+                direction,
+                density,
+                speed,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                len(colors),  # Color count
+            ]
+        )
+
+        # Add colors as HSV (5 bytes each)
+        for r, g, b in colors:
+            msg.extend(self._rgb_to_hsv_bytes(r, g, b))
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Construct a custom segment colors command (0xE1 0x22).
+
+        Sets static HSV colors for each of 20 segments on the light strip.
+        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
+
+        Protocol format:
+          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
+
+        Args:
+            segments: List of up to 20 segment colors. Each segment is either:
+                - None or (0, 0, 0) for off
+                - (R, G, B) tuple with values 0-255
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Build inner message: header + 20 segments
+        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+
+        for i in range(20):
+            segment = segments[i] if i < len(segments) else None
+            if segment and segment != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segment))
+            else:
+                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
