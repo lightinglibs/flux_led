@@ -7,6 +7,7 @@ import datetime
 import json
 import logging
 import time
+from optparse import OptionParser
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -39,6 +40,7 @@ from flux_led.const import (
     ScribbleLED,
     WhiteChannelType,
 )
+from flux_led.fluxled import processSetTimerArgs, processSetTimerArgsExtended
 from flux_led.protocol import (
     LEDENET_EXTENDED_STATE_RESPONSE_LEN,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
@@ -6178,3 +6180,231 @@ def test_led_timer_extended_from_bytes_truncated():
     data = bytes([0x01, 0xF0, 12, 30, 0])
     _timer, consumed = LedTimerExtended.from_bytes(data, 0)
     assert consumed == 5  # Returns what's available
+
+
+
+def test_cli_process_set_timer_args_extended_inactive():
+    """Test CLI parsing for inactive extended timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(parser, ["1", "inactive", ""])
+    assert timer.slot == 1
+    assert timer.active is False
+    assert timer.action_type == TIMER_ACTION_OFF
+
+
+def test_cli_process_set_timer_args_extended_poweroff():
+    """Test CLI parsing for poweroff extended timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["2", "poweroff", "time:1430;repeat:12345"]
+    )
+    assert timer.slot == 2
+    assert timer.active is True
+    assert timer.hour == 14
+    assert timer.minute == 30
+    assert timer.action_type == TIMER_ACTION_OFF
+    # repeat 12345 = Mon|Tue|Wed|Thu|Fri = bits 1,2,3,4,5 = 0x3E
+    assert timer.repeat_mask == 0x3E
+
+
+def test_cli_process_set_timer_args_extended_default_on():
+    """Test CLI parsing for default (on) extended timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(parser, ["3", "default", "time:0830;repeat:06"])
+    assert timer.slot == 3
+    assert timer.active is True
+    assert timer.hour == 8
+    assert timer.minute == 30
+    assert timer.action_type == TIMER_ACTION_ON
+    # repeat 06 = Sun|Sat = bits 7,6 = 0x80|0x40 = 0xC0
+    assert timer.repeat_mask == 0xC0
+
+
+def test_cli_process_set_timer_args_extended_color():
+    """Test CLI parsing for color extended timer."""
+    parser = OptionParser()
+    # Use color name instead of hex code (hex needs # prefix)
+    timer = processSetTimerArgsExtended(
+        parser, ["4", "color", "time:2100;repeat:0123456;color:red"]
+    )
+    assert timer.slot == 4
+    assert timer.active is True
+    assert timer.hour == 21
+    assert timer.minute == 0
+    assert timer.action_type == TIMER_ACTION_COLOR
+    assert timer.color_hsv is not None
+    # red should have hue=0
+    assert timer.color_hsv[0] == 0  # hue
+
+
+def test_cli_process_set_timer_args_extended_color_with_brightness():
+    """Test CLI parsing for color extended timer with brightness."""
+    parser = OptionParser()
+    # Use hex with # prefix
+    timer = processSetTimerArgsExtended(
+        parser, ["5", "color", "time:1200;repeat:1;color:#00ff00;brightness:50"]
+    )
+    assert timer.slot == 5
+    assert timer.active is True
+    assert timer.action_type == TIMER_ACTION_COLOR
+    assert timer.color_hsv is not None
+    # Check brightness is 50
+    assert timer.color_hsv[2] == 50
+
+
+def test_cli_process_set_timer_args_extended_weekend_repeat():
+    """Test CLI parsing for weekend repeat (0=Sun, 6=Sat)."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["1", "poweroff", "time:2200;repeat:06"]
+    )
+    # repeat 06 = Sun|Sat = bit7 | bit6 = 0x80 | 0x40 = 0xC0
+    assert timer.repeat_mask == 0xC0
+
+
+def test_cli_process_set_timer_args_extended_everyday_repeat():
+    """Test CLI parsing for everyday repeat (0123456)."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["1", "default", "time:0700;repeat:0123456"]
+    )
+    # repeat 0123456 = Sun|Mon|Tue|Wed|Thu|Fri|Sat
+    # bit7=Sun + bits1-6 = 0x80 | 0x7E = 0xFE
+    assert timer.repeat_mask == 0xFE
+
+
+def test_cli_process_set_timer_args_standard_inactive():
+    """Test CLI parsing for inactive standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["1", "inactive", ""])
+    assert timer.isActive() is False
+
+
+def test_cli_process_set_timer_args_standard_poweroff():
+    """Test CLI parsing for poweroff standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["2", "poweroff", "time:1430;repeat:12345"])
+    assert timer.isActive() is True
+    assert timer.hour == 14
+    assert timer.minute == 30
+    # Check it's a turn-off timer
+    assert timer.turn_on is False
+
+
+def test_cli_process_set_timer_args_standard_default():
+    """Test CLI parsing for default (on) standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["3", "default", "time:0830;repeat:06"])
+    assert timer.isActive() is True
+    assert timer.hour == 8
+    assert timer.minute == 30
+
+
+def test_cli_process_set_timer_args_standard_color():
+    """Test CLI parsing for color standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["4", "color", "time:2100;repeat:0123456;color:255,0,0"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 21
+    assert timer.minute == 0
+    assert timer.red == 255
+    assert timer.green == 0
+    assert timer.blue == 0
+
+
+def test_cli_process_set_timer_args_standard_warmwhite():
+    """Test CLI parsing for warmwhite standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["5", "warmwhite", "time:2200;repeat:12345;level:75"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 22
+    assert timer.minute == 0
+    # 75% is converted to byte: int((75 * 255) / 100) = 191
+    assert timer.warmth_level == 191
+
+
+def test_cli_process_set_timer_args_standard_preset():
+    """Test CLI parsing for preset standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["6", "preset", "time:1800;repeat:06;code:37;speed:50"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 18
+    assert timer.minute == 0
+    assert timer.pattern_code == 37
+
+
+# =============================================================================
+# Timer Display Formatting Tests (__str__)
+# =============================================================================
+
+
+def test_led_timer_standard_str_inactive():
+    """Test LedTimer.__str__ for inactive timer."""
+    timer = LedTimer()
+    timer.setActive(False)
+    assert str(timer) == "Unset"
+
+
+def test_led_timer_standard_str_on():
+    """Test LedTimer.__str__ for turn-on timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(8, 30)
+    timer.setModeDefault()
+    timer.setRepeatMask(LedTimer.Weekdays)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "08:30" in s
+    assert "Mo" in s
+    assert "Tu" in s
+    assert "Fr" in s
+
+
+def test_led_timer_standard_str_off():
+    """Test LedTimer.__str__ for turn-off timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(22, 0)
+    timer.setModeTurnOff()
+    timer.setRepeatMask(LedTimer.Everyday)
+
+    s = str(timer)
+    assert "[OFF]" in s
+    assert "22:00" in s
+
+
+def test_led_timer_standard_str_once():
+    """Test LedTimer.__str__ for one-time timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(14, 30)
+    timer.setModeDefault()
+    timer.setDate(2025, 12, 25)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "14:30" in s
+    assert "Once" in s
+    assert "2025-12-25" in s
+
+
+def test_led_timer_standard_str_color():
+    """Test LedTimer.__str__ for color timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(19, 0)
+    timer.setModeColor(255, 0, 0)
+    timer.setRepeatMask(LedTimer.Weekend)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "19:00" in s
+    assert "Sa" in s
+    assert "Su" in s
