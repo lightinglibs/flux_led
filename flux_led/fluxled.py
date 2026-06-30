@@ -43,16 +43,29 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import re
 import sys
 from optparse import OptionGroup, OptionParser, Values
-from typing import Any
+from typing import Any, cast
 
 from .aio import AIOWifiLedBulb
 from .aioscanner import AIOBulbScanner
-from .const import ATTR_ID, ATTR_IPADDR
+from .const import (
+    ATTR_ID,
+    ATTR_IPADDR,
+    TIMER_ACTION_COLOR,
+    TIMER_ACTION_OFF,
+    TIMER_ACTION_ON,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectPattern,
+    ScribbleBlinkMode,
+    ScribbleEffect,
+    ScribbleLED,
+)
 from .pattern import PresetPattern
+from .protocol import ProtocolLEDENETExtendedCustom
 from .scanner import FluxLEDDiscovery
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import utils
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,6 +119,18 @@ Set preset pattern #35 with 40% speed:
 
 Set custom pattern 25% speed, red/green/blue, gradual change:
     %prog% 192.168.1.100 -C gradual 25 "red green (0,0,255)"
+
+Set extended custom effect (0xB6 devices) - wave pattern, 80% speed:
+    %prog% 192.168.1.100 -C wave 80 "red green blue"
+
+Set extended effect with density, direction, and color change options:
+    %prog% 192.168.1.100 -C meteor 50 "purple orange" --density 75 --direction r2l --colorchange
+
+Set custom segment colors (0xB6 devices) - set each segment individually:
+    %prog% 192.168.1.100 -C segments 0 "red green blue off off red green blue"
+
+Set per-LED scribble colors (0xB6 devices) - specify each LED individually:
+    %prog% 192.168.1.100 -C scribble static "10xred 70xoff"
 
 Sync all bulb's clocks with this computer's:
     %prog% -sS --setclock
@@ -355,35 +380,544 @@ def processSetTimerArgs(parser: OptionParser, args: Any) -> LedTimer:
     return timer
 
 
-def processCustomArgs(
-    parser: OptionParser, args: Any
-) -> tuple[Any, int, list[tuple[int, ...]]] | None:
-    if args[0] not in ["gradual", "jump", "strobe"]:
-        parser.error(f"bad pattern type: {args[0]}")
+def processSetTimerArgsExtended(
+    parser: OptionParser, args: list[str]
+) -> LedTimerExtended:
+    """Process timer args for 0xB6 extended timer format.
+
+    Supported modes: inactive, default (on), poweroff, color
+    Settings format: mode;time:HHMM;repeat:0123456;color:RRGGBB
+    """
+    num = args[0]
+    mode = args[1].lower() if len(args) > 1 else "inactive"
+    settings = args[2] if len(args) > 2 else ""
+
+    if not num.isdigit() or int(num) > 6 or int(num) < 1:
+        parser.error("Timer number must be between 1 and 6")
+
+    slot = int(num)
+
+    # parse settings
+    settings_dict: dict[str, str] = {}
+    if settings:
+        for s in settings.split(";"):
+            pair = s.split(":")
+            key = pair[0].strip().lower()
+            val = pair[1].strip().lower() if len(pair) > 1 else ""
+            settings_dict[key] = val
+
+    if mode == "inactive":
+        return LedTimerExtended(
+            slot=slot,
+            active=False,
+            hour=0,
+            minute=0,
+            repeat_mask=0,
+            action_type=TIMER_ACTION_OFF,
+        )
+
+    if mode not in ["poweroff", "default", "color"]:
+        parser.error(
+            f"Not a valid timer mode for this device: {mode}. "
+            "Supported: inactive, default, poweroff, color"
+        )
+
+    # validate time
+    if "time" not in settings_dict:
+        parser.error(f"This mode needs a time: {mode}")
+    time_str = settings_dict["time"]
+    if len(time_str) != 4 or not time_str.isdigit():
+        parser.error("time must be 4 digits (HHMM)")
+    hour = int(time_str[0:2])
+    minute = int(time_str[2:4])
+    if hour > 23:
+        parser.error("timer hour can't be greater than 23")
+    if minute > 59:
+        parser.error("timer minute can't be greater than 59")
+
+    # parse repeat mask
+    # Format: repeat:0123456 where 0=Sun, 1=Mon, ..., 6=Sat
+    repeat_mask = 0
+    if "repeat" in settings_dict:
+        repeat_str = settings_dict["repeat"]
+        for c in repeat_str:
+            if c not in "0123456":
+                parser.error("repeat can only contain digits 0-6")
+            day = int(c)
+            # Map: 0=Sun->bit7, 1=Mon->bit1, 2=Tue->bit2, ..., 6=Sat->bit6
+            if day == 0:
+                repeat_mask |= 0x80  # Sunday = bit 7
+            else:
+                repeat_mask |= 1 << day  # Mon=bit1, Tue=bit2, etc.
+
+    # determine action type and build timer
+    if mode == "poweroff":
+        return LedTimerExtended(
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
+            repeat_mask=repeat_mask,
+            action_type=TIMER_ACTION_OFF,
+        )
+
+    if mode == "default":
+        return LedTimerExtended(
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
+            repeat_mask=repeat_mask,
+            action_type=TIMER_ACTION_ON,
+        )
+
+    if mode == "color":
+        if "color" not in settings_dict:
+            parser.error("color mode needs a color setting")
+        color_val = settings_dict["color"]
+        # If it looks like hex without # prefix (6 hex chars), add the prefix
+        if len(color_val) == 6 and all(c in "0123456789abcdef" for c in color_val):
+            color_val = "#" + color_val
+        rgb = utils.color_object_to_tuple(color_val)
+        if rgb is None:
+            parser.error(f"Invalid color value: {color_val}")
+        assert rgb is not None
+        # Convert RGB to HSV (0-255 scale)
+        r, g, b = rgb[0], rgb[1], rgb[2]
+        max_c = max(r, g, b)
+        min_c = min(r, g, b)
+        if max_c == 0:
+            hsv_s = 0
+            hsv_h = 0
+        else:
+            hsv_s = int((max_c - min_c) * 255 / max_c)
+            delta = max_c - min_c
+            if delta == 0:
+                hsv_h = 0
+            elif max_c == r:
+                hsv_h = int(((g - b) / delta) * 255 / 6) % 256
+            elif max_c == g:
+                hsv_h = int((2.0 + (b - r) / delta) * 255 / 6) % 256
+            else:
+                hsv_h = int((4.0 + (r - g) / delta) * 255 / 6) % 256
+
+        # brightness from settings or default to 100%
+        brightness = 100
+        if "brightness" in settings_dict:
+            brightness = int(settings_dict["brightness"])
+            brightness = min(brightness, 100)
+
+        return LedTimerExtended(
+            slot=slot,
+            active=True,
+            hour=hour,
+            minute=minute,
+            repeat_mask=repeat_mask,
+            action_type=TIMER_ACTION_COLOR,
+            color_hsv=(hsv_h, hsv_s, brightness),
+        )
+
+    # Should never reach here due to earlier validation
+    parser.error(f"Not a valid timer mode: {mode}")
+    raise SystemExit(1)  # For type checker
+
+
+_SCRIBBLE_EFFECT_NAMES: dict[str, ScribbleEffect] = {
+    "static": ScribbleEffect.STATIC,
+    "flowing": ScribbleEffect.FLOWING,
+    "twinkling": ScribbleEffect.TWINKLING_STARS,
+    "stars_wink": ScribbleEffect.STARS_WINK,
+    "accumulate": ScribbleEffect.ACCUMULATE,
+}
+
+_SCRIBBLE_BLINK_NAMES: dict[str, ScribbleBlinkMode] = {
+    "none": ScribbleBlinkMode.NONE,
+    "slow": ScribbleBlinkMode.SLOW,
+    "fast": ScribbleBlinkMode.FAST,
+}
+
+_RUN_LENGTH_RE = re.compile(r"^(?:(\d+)x)?(.+)$")
+_WHITE_LEVEL_RE = re.compile(r"^w(\d+)$")
+
+
+def _parse_scribble_led_token(
+    token: str,
+    parser: OptionParser,
+    blink_mode: ScribbleBlinkMode,
+    blink_speed: int,
+) -> ScribbleLED:
+    """Parse a single LED value token into a ScribbleLED.
+
+    Accepts an optional per-token blink suffix using '/' as separator:
+    ``<value>[/<blinkmode>[/<blinkspeed>]]``
+
+    ``<value>`` is a color name/hex/r,g,b, a white-level ``w<level>``, or
+    ``off``.  ``<blinkmode>`` is ``none|slow|fast``; ``<blinkspeed>`` is
+    0-100.  A per-token blink suffix overrides the caller-supplied global
+    blink_mode / blink_speed defaults.
+    """
+    # Split off optional /blinkmode[/blinkspeed] suffix.
+    # '/' cannot appear in color names (hex uses only hex digits; r,g,b uses
+    # commas; color names are plain words), so splitting on '/' is unambiguous.
+    parts = token.split("/")
+    value_part = parts[0]
+    if len(parts) > 1:
+        # Per-token blink override present
+        blink_part = parts[1].lower()
+        if blink_part not in _SCRIBBLE_BLINK_NAMES:
+            parser.error(
+                f"Invalid blink mode '{parts[1]}' in token '{token}'. "
+                f"Use none, slow, or fast."
+            )
+            raise SystemExit(1)
+        blink_mode = _SCRIBBLE_BLINK_NAMES[blink_part]
+        if len(parts) > 2:
+            try:
+                blink_speed = int(parts[2])
+            except ValueError:
+                parser.error(
+                    f"Invalid blink speed '{parts[2]}' in token '{token}'. "
+                    f"Must be an integer."
+                )
+                raise SystemExit(1)
+        if len(parts) > 3:
+            parser.error(f"Too many '/' separators in token '{token}'.")
+            raise SystemExit(1)
+
+    token_lower = value_part.lower()
+    if token_lower == "off":
+        return ScribbleLED(
+            rgb=None, white=None, blink_mode=blink_mode, blink_speed=blink_speed
+        )
+    # White-level token: 'w' followed by DIGITS ONLY (e.g. w50). A token like
+    # 'white' or 'wheat' is a color name, so it falls through to the color parser.
+    white_match = _WHITE_LEVEL_RE.match(token_lower)
+    if white_match:
+        level = int(white_match.group(1))
+        return ScribbleLED(
+            rgb=None, white=level, blink_mode=blink_mode, blink_speed=blink_speed
+        )
+    # Color token
+    c = utils.color_object_to_tuple(value_part)
+    if c is None or len(c) < 3:
+        parser.error(
+            f"Invalid color token '{value_part}'. Use a color name, hex value, or r,g,b triple."
+        )
+        raise SystemExit(1)
+    return ScribbleLED(
+        rgb=(c[0], c[1], c[2]),
+        white=None,
+        blink_mode=blink_mode,
+        blink_speed=blink_speed,
+    )
+
+
+def _process_scribble_args(
+    parser: OptionParser,
+    args: Any,
+) -> dict[str, Any] | None:
+    """Parse scribble-mode args: ('scribble', <effect>, '<per-led-spec>').
+
+    ``<effect>`` may be a named effect (static/flowing/twinkling/stars_wink/
+    accumulate) OR a raw integer 0-8.
+    """
+    effect_name = args[1].lower() if len(args) > 1 else "static"
+    if effect_name in _SCRIBBLE_EFFECT_NAMES:
+        effect_id: int = _SCRIBBLE_EFFECT_NAMES[effect_name].value
+    else:
+        # Try numeric id
+        try:
+            effect_id = int(effect_name)
+        except ValueError:
+            parser.error(
+                f"Unknown scribble effect '{effect_name}'. "
+                f"Valid names: {', '.join(_SCRIBBLE_EFFECT_NAMES)}; "
+                f"or a number 0-8."
+            )
+            return None
+        if not 0 <= effect_id <= 8:
+            parser.error(
+                f"Scribble effect id {effect_id} out of range. "
+                f"Valid names: {', '.join(_SCRIBBLE_EFFECT_NAMES)}; "
+                f"or a number 0-8."
+            )
+            return None
+
+    spec_str = args[2].strip() if len(args) > 2 else ""
+
+    # Defaults for optional key=value tokens
+    density = 80
+    speed = 100
+    direction = ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+    blink_mode = ScribbleBlinkMode.NONE
+    blink_speed = 100
+    enter_mode = True
+
+    # Split spec on whitespace; separate LED tokens from key=value tokens
+    all_tokens = spec_str.split()
+    led_tokens: list[str] = []
+    for tok in all_tokens:
+        if "=" in tok:
+            key, _, val = tok.partition("=")
+            key = key.lower().strip()
+            val = val.strip()
+            if key == "density":
+                try:
+                    density = int(val)
+                except ValueError:
+                    parser.error(f"Invalid density value '{val}'. Must be an integer.")
+                    return None
+            elif key == "speed":
+                try:
+                    speed = int(val)
+                except ValueError:
+                    parser.error(f"Invalid speed value '{val}'. Must be an integer.")
+                    return None
+            elif key == "dir":
+                if val.lower() in ("l2r", "left", "ltr"):
+                    direction = ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+                elif val.lower() in ("r2l", "right", "rtl"):
+                    direction = ExtendedCustomEffectDirection.RIGHT_TO_LEFT
+                else:
+                    parser.error(f"Invalid dir value '{val}'. Use l2r or r2l.")
+                    return None
+            elif key == "blink":
+                bl = val.lower()
+                if bl not in _SCRIBBLE_BLINK_NAMES:
+                    parser.error(
+                        f"Invalid blink value '{val}'. Use none, slow, or fast."
+                    )
+                    return None
+                blink_mode = _SCRIBBLE_BLINK_NAMES[bl]
+            elif key == "blinkspeed":
+                try:
+                    blink_speed = int(val)
+                except ValueError:
+                    parser.error(
+                        f"Invalid blinkspeed value '{val}'. Must be an integer."
+                    )
+                    return None
+            elif key == "enter":
+                if val.lower() == "true":
+                    enter_mode = True
+                elif val.lower() == "false":
+                    enter_mode = False
+                else:
+                    parser.error(f"Invalid enter value '{val}'. Use true or false.")
+                    return None
+            else:
+                parser.error(f"Unknown scribble option '{key}'.")
+                return None
+        else:
+            led_tokens.append(tok)
+
+    # Expand run-length tokens into ScribbleLED list
+    leds: list[ScribbleLED] = []
+    for tok in led_tokens:
+        m = _RUN_LENGTH_RE.match(tok)
+        if not m:
+            parser.error(f"Malformed LED token '{tok}'.")
+            return None
+        count_str, value_part = m.group(1), m.group(2)
+        count = int(count_str) if count_str else 1
+        led = _parse_scribble_led_token(value_part, parser, blink_mode, blink_speed)
+        leds.extend([led] * count)
+
+    if not leds:
+        parser.error("At least one LED entry is required for scribble mode.")
         return None
+
+    return {
+        "mode": "scribble",
+        "effect": effect_id,
+        "leds": leds,
+        "direction": direction.value,
+        "density": density,
+        "speed": speed,
+        "enter_mode": enter_mode,
+    }
+
+
+def _reconcile_scribble_led_count(
+    leds: list[ScribbleLED],
+    device_count: int | None,
+) -> list[ScribbleLED]:
+    """Reconcile a parsed LED list against the device's configured LED count.
+
+    If device_count is None (state unknown), return leds unchanged. Otherwise
+    pad the tail with off-LEDs or truncate so the result is exactly
+    device_count entries.
+    """
+    if device_count is None or len(leds) == device_count:
+        return leds
+    if len(leds) > device_count:
+        return leds[:device_count]
+    padding = [ScribbleLED(rgb=None, white=None)] * (device_count - len(leds))
+    return leds + padding
+
+
+def processCustomArgs(
+    parser: OptionParser,
+    args: Any,
+    density: int = 50,
+    direction: str = "l2r",
+    colorchange: bool = False,
+    variant: int | None = None,
+) -> dict[str, Any] | None:
+    """Process custom pattern arguments.
+
+    Supports both standard patterns (jump, gradual, strobe) and extended
+    patterns (wave, meteor, etc.) for devices that support them.
+
+    Returns a dict with:
+        - mode: "standard", "extended", or "segments"
+        - For standard: type, speed, colors
+        - For extended: pattern_id, speed, density, colors, direction, option
+        - For segments: colors (list of up to 20 colors)
+    """
+    # Build mapping of extended pattern names to IDs
+    extended_pattern_names = {
+        p.name.lower().replace("_", " "): p.value for p in ExtendedCustomEffectPattern
+    }
+    # Also add underscore versions and single word versions
+    for p in ExtendedCustomEffectPattern:
+        extended_pattern_names[p.name.lower()] = p.value
+
+    pattern_type = args[0].lower()
+
+    # Check if this is "scribble" mode (must come before speed = int(args[1])
+    # because args[1] is an effect name, not a numeric speed)
+    if pattern_type == "scribble":
+        return _process_scribble_args(parser, args)
 
     speed = int(args[1])
 
-    # convert the string to a list of RGB tuples
-    # it should have space separated items of either
-    # color names, hex values, or byte triples
-    try:
-        color_list_str = args[2].strip()
-        str_list = color_list_str.split(" ")
-        color_list = []
-        for s in str_list:
-            c = utils.color_object_to_tuple(s)
-            if c is not None:
-                color_list.append(c)
-            else:
-                raise Exception
+    # Check if this is a standard pattern
+    if pattern_type in ["gradual", "jump", "strobe"]:
+        # Standard custom pattern
+        try:
+            color_list_str = args[2].strip()
+            str_list = color_list_str.split(" ")
+            color_list: list[tuple[int, ...]] = []
+            for s in str_list:
+                c = utils.color_object_to_tuple(s)
+                if c is not None:
+                    color_list.append(c)
+                else:
+                    raise ValueError(f"Invalid color: {s}")
+        except Exception:
+            parser.error(
+                "COLORLIST isn't formatted right. It should be a space separated list "
+                "of RGB tuples, color names or web hex values"
+            )
+            return None
 
-    except Exception:
-        parser.error(
-            "COLORLIST isn't formatted right.  It should be a space separated list of RGB tuples, color names or web hex values"
-        )
+        return {
+            "mode": "standard",
+            "type": pattern_type,
+            "speed": speed,
+            "colors": color_list,
+        }
 
-    return args[0], speed, color_list
+    # Check if this is "segments" mode
+    if pattern_type == "segments":
+        try:
+            color_list_str = args[2].strip()
+            str_list = color_list_str.split(" ")
+            segment_list: list[tuple[int, int, int] | None] = []
+            for s in str_list:
+                s = s.strip().lower()
+                if not s:
+                    continue
+                if s == "off":
+                    segment_list.append(None)
+                else:
+                    c = utils.color_object_to_tuple(s)
+                    if c is not None and len(c) >= 3:
+                        segment_list.append((c[0], c[1], c[2]))
+                    else:
+                        raise ValueError(f"Invalid color: {s}")
+            if len(segment_list) == 0:
+                parser.error("At least one segment color is required")
+                return None
+            if len(segment_list) > 20:
+                print("Warning: More than 20 segments provided, truncating to 20")
+                segment_list = segment_list[:20]
+        except Exception as e:
+            parser.error(
+                f"COLORLIST isn't formatted right: {e}. It should be a space-separated "
+                "list of color names, hex values, RGB triples, or 'off'"
+            )
+            return None
+
+        return {
+            "mode": "segments",
+            "colors": segment_list,
+        }
+
+    # Check if this is an extended pattern name
+    if pattern_type in extended_pattern_names:
+        pattern_id = extended_pattern_names[pattern_type]
+
+        # Parse color list
+        try:
+            color_list_str = args[2].strip()
+            str_list = color_list_str.split(" ")
+            ext_color_list: list[tuple[int, int, int]] = []
+            for s in str_list:
+                c = utils.color_object_to_tuple(s)
+                if c is not None and len(c) >= 3:
+                    ext_color_list.append((c[0], c[1], c[2]))
+                else:
+                    raise ValueError(f"Invalid color: {s}")
+            if len(ext_color_list) == 0:
+                parser.error("At least one color is required")
+                return None
+            if len(ext_color_list) > 8:
+                print("Warning: More than 8 colors provided, truncating to 8")
+                ext_color_list = ext_color_list[:8]
+        except Exception as e:
+            parser.error(
+                f"COLORLIST isn't formatted right: {e}. It should be a space-separated "
+                "list of color names, hex values, or RGB triples"
+            )
+            return None
+
+        # Parse direction
+        if direction.lower() in ("l2r", "left", "ltr"):
+            dir_value = ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value
+        elif direction.lower() in ("r2l", "right", "rtl"):
+            dir_value = ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value
+        else:
+            parser.error(f"Invalid direction: {direction}. Use l2r or r2l")
+            return None
+
+        # Option value: --variant takes precedence; fall back to --colorchange.
+        if variant is not None:
+            if not 0 <= variant <= 2:
+                parser.error(f"Invalid --variant {variant}. Must be 0, 1, or 2.")
+                return None
+            option_value = variant
+        else:
+            option_value = 0x01 if colorchange else 0x00
+
+        return {
+            "mode": "extended",
+            "pattern_id": pattern_id,
+            "speed": speed,
+            "density": density,
+            "colors": ext_color_list,
+            "direction": dir_value,
+            "option": option_value,
+        }
+
+    # Unknown pattern type - show valid options
+    parser.error(
+        f"Unknown pattern type: {pattern_type}. Valid types include: "
+        f"jump, gradual, strobe, segments, wave, meteor, breathe, etc. "
+        f"Use --listpresets for the full list."
+    )
+    return None
 
 
 def parseArgs() -> tuple[Values, Any]:
@@ -427,7 +961,7 @@ def parseArgs() -> tuple[Values, Any]:
         action="store_true",
         dest="listpresets",
         default=False,
-        help="List preset codes",
+        help="List preset codes (including extended patterns for 0xB6 devices)",
     )
     info_group.add_option(
         "--listcolors",
@@ -527,10 +1061,46 @@ def parseArgs() -> tuple[Values, Any]:
         default=None,
         nargs=3,
         help="Set custom pattern mode. "
-        + "TYPE should be jump, gradual, or strobe. SPEED is percent. "
-        + "COLORLIST is a space-separated list of color names, web hex values, or comma-separated RGB triples",
+        + "TYPE: jump, gradual, strobe (standard), or extended pattern names "
+        + "(wave, meteor, breathe, etc. for 0xB6 devices), or 'segments' for static colors, "
+        + "or 'scribble' for per-LED colors (0xB6 devices). "
+        + "SPEED is percent (0-100) (for scribble, use the effect name or 0-8 id instead). "
+        + "COLORLIST is a space-separated list of color names, hex values, or RGB triples. "
+        + "Use --density, --direction, --colorchange, --variant 0|1|2 for extended pattern options.",
     )
     parser.add_option_group(mode_group)
+
+    other_group.add_option(
+        "--density",
+        dest="density",
+        default=50,
+        type="int",
+        metavar="DENSITY",
+        help="Pattern density 0-100 for extended effects (default: 50)",
+    )
+    other_group.add_option(
+        "--direction",
+        dest="direction",
+        default="l2r",
+        metavar="DIR",
+        help="Direction for extended effect: l2r (left to right) or r2l (right to left). Default: l2r",
+    )
+    other_group.add_option(
+        "--colorchange",
+        action="store_true",
+        dest="colorchange",
+        default=False,
+        help="Enable color change option for extended effect (equivalent to --variant 1)",
+    )
+    other_group.add_option(
+        "--variant",
+        dest="variant",
+        default=None,
+        type="int",
+        metavar="VARIANT",
+        help="Extended effect option variant: 0, 1, or 2 (overrides --colorchange). "
+        "Use with -C <extended-pattern> SPEED COLORLIST.",
+    )
 
     parser.add_option(
         "-i",
@@ -611,10 +1181,24 @@ def parseArgs() -> tuple[Values, Any]:
         sys.exit(0)
 
     if options.listpresets:
+        print("Standard preset patterns (-p option):")
         for c in range(
             PresetPattern.seven_color_cross_fade, PresetPattern.seven_color_jumping + 1
         ):
-            print(f"{c:2} {PresetPattern.valtostr(c)}")
+            print(f"  {c:2} {PresetPattern.valtostr(c)}")
+        print("\nStandard custom pattern types (-C option):")
+        print("  jump     - Colors change instantly")
+        print("  gradual  - Colors fade smoothly")
+        print("  strobe   - Colors flash rapidly")
+        print("\nExtended custom patterns (-C option, 0xB6 devices only):")
+        for p in ExtendedCustomEffectPattern:
+            print(f"  {p.name.lower().replace('_', ' '):<20} (ID: {p.value})")
+        print("\nSegment colors (-C segments, 0xB6 devices only):")
+        print("  segments - Set individual segment colors (up to 20)")
+        print("\nPer-LED scribble (-C scribble, 0xB6 devices only):")
+        print('  scribble <effect> "<per-led-spec>"  - Set per-LED colors/blink')
+        print("  Effects: static, flowing, twinkling, stars_wink, accumulate")
+        print('  Example: -C scribble static "10xred 70xoff"')
         sys.exit(0)
 
     if options.listcolors:
@@ -623,11 +1207,9 @@ def parseArgs() -> tuple[Values, Any]:
         print()
         sys.exit(0)
 
-    if options.settimer:
-        new_timer = processSetTimerArgs(parser, options.settimer)
-        options.new_timer = new_timer
-    else:
-        options.new_timer = None
+    # Timer processing is deferred to _async_run_commands since we need
+    # to know the device protocol first (0xB6 uses extended timer format)
+    options.new_timer = None
 
     mode_count = 0
     if options.color:
@@ -651,7 +1233,14 @@ def parseArgs() -> tuple[Values, Any]:
         parser.error("options --on and --off are mutually exclusive")
 
     if options.custom:
-        options.custom = processCustomArgs(parser, options.custom)
+        options.custom = processCustomArgs(
+            parser,
+            options.custom,
+            density=options.density,
+            direction=options.direction,
+            colorchange=options.colorchange,
+            variant=options.variant,
+        )
 
     if options.color:
         options.color = utils.color_object_to_tuple(options.color)
@@ -782,12 +1371,114 @@ async def _async_run_commands(
             )
 
     elif options.custom is not None:
-        await bulb.async_set_custom_pattern(
-            options.custom[2], options.custom[1], options.custom[0]
-        )
-        buf_in(
-            f"Setting custom pattern: {options.custom[0]}, Speed={options.custom[1]}%, {options.custom[2]}"
-        )
+        custom = options.custom
+        mode = custom["mode"]
+
+        if mode == "standard":
+            # Standard custom pattern (jump, gradual, strobe)
+            await bulb.async_set_custom_pattern(
+                custom["colors"], custom["speed"], custom["type"]
+            )
+            buf_in(
+                f"Setting custom pattern: {custom['type']}, "
+                f"Speed={custom['speed']}%, {custom['colors']}"
+            )
+
+        elif mode == "extended":
+            # Extended custom effect (wave, meteor, etc.)
+            if not bulb.supports_extended_custom_effects:
+                raise ValueError(
+                    f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
+                    "does not support extended custom effects. "
+                    "Use jump, gradual, or strobe for this device."
+                )
+            pattern_id = custom["pattern_id"]
+            speed = custom["speed"]
+            density = custom["density"]
+            colors = custom["colors"]
+            direction = custom["direction"]
+            option = custom["option"]
+
+            # Get pattern name for display
+            try:
+                pattern_name = (
+                    ExtendedCustomEffectPattern(pattern_id)
+                    .name.lower()
+                    .replace("_", " ")
+                )
+            except ValueError:
+                pattern_name = f"pattern {pattern_id}"
+            dir_name = (
+                "L->R"
+                if direction == ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value
+                else "R->L"
+            )
+            buf_in(
+                f"Setting extended effect: {pattern_name}, "
+                f"Speed={speed}%, Density={density}%, Direction={dir_name}, "
+                f"Colors={colors}"
+            )
+            await bulb.async_set_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            )
+
+        elif mode == "segments":
+            # Custom segment colors
+            if not bulb.supports_extended_custom_effects:
+                raise ValueError(
+                    f"Device {bulb.model} (model_num=0x{bulb.model_num:02X}) "
+                    "does not support custom segment colors. "
+                    "This feature is only available on 0xB6 devices."
+                )
+            buf_in(f"Setting custom segment colors: {len(custom['colors'])} segments")
+            await bulb.async_set_custom_segment_colors(custom["colors"])
+
+        elif mode == "scribble":
+            # Per-LED scribble configuration
+            if not bulb.supports_scribble:
+                buf_in(f"{bulb.model} does not support the scribble (per-LED) feature.")
+            else:
+                leds = custom["leds"]
+                # Pass the raw int effect id; the API accepts ScribbleEffect|int
+                # so unnamed ids (3, 4, 6, 7) work without raising ValueError.
+                effect_id_raw: int = custom["effect"]
+                direction = ExtendedCustomEffectDirection(custom["direction"])
+                density = custom["density"]
+                speed = custom["speed"]
+                scribble_enter_mode: bool = custom.get("enter_mode", True)
+                # Reconcile parsed LED count with the device's configured count:
+                # pad the tail with off-LEDs or truncate so the upload is exactly
+                # the device's LED count (avoids the API's hard count check).
+                device_count = bulb.led_count
+                if device_count is not None and len(leds) != device_count:
+                    buf_in(
+                        f"Warning: {len(leds)} LED entries provided but device has "
+                        f"{device_count} LEDs; "
+                        + (
+                            "padding tail with off."
+                            if len(leds) < device_count
+                            else "truncating."
+                        )
+                    )
+                    leds = _reconcile_scribble_led_count(leds, device_count)
+                # Build display name for the effect id
+                try:
+                    effect_display = ScribbleEffect(effect_id_raw).name.lower()
+                except ValueError:
+                    effect_display = str(effect_id_raw)
+                buf_in(
+                    f"Setting scribble: {len(leds)} LEDs, "
+                    f"effect={effect_display}, "
+                    f"speed={speed}, density={density}"
+                )
+                await bulb.async_set_scribble(
+                    leds,
+                    effect=effect_id_raw,
+                    direction=direction,
+                    density=density,
+                    speed=speed,
+                    enter_mode=scribble_enter_mode,
+                )
 
     elif options.preset is not None:
         buf_in(
@@ -806,14 +1497,29 @@ async def _async_run_commands(
         buf_in("{} [{}] {} ({})".format(info["id"], info["ipaddr"], bulb, bulb.model))
 
     if options.settimer:
-        empty_timers: list[LedTimer] = []
-        timers = await bulb.async_get_timers() or empty_timers
+        # Check if device uses extended timer format (0xB6)
+        is_extended = isinstance(bulb._protocol, ProtocolLEDENETExtendedCustom)
         num = int(options.settimer[0])
-        buf_in(f"New Timer ---- #{num}: {options.new_timer}")
-        if options.new_timer.isExpired():
-            buf_in("[timer is already expired, will be deactivated]")
-        timers[num - 1] = options.new_timer
-        await bulb.async_set_timers(timers)
+
+        if is_extended:
+            # Create a minimal parser for error handling
+            temp_parser = OptionParser()
+            ext_timer = processSetTimerArgsExtended(temp_parser, options.settimer)
+            buf_in(f"New Timer ---- #{num}: {ext_timer}")
+            await bulb.async_set_timer(ext_timer)
+        else:
+            temp_parser = OptionParser()
+            std_timer = processSetTimerArgs(temp_parser, options.settimer)
+            buf_in(f"New Timer ---- #{num}: {std_timer}")
+            if std_timer.isExpired():
+                buf_in("[timer is already expired, will be deactivated]")
+            timers_result = await bulb.async_get_timers()
+            timers_list = cast("list[LedTimer]", timers_result) if timers_result else []
+            if len(timers_list) < num:
+                # Extend list if needed
+                timers_list.extend([LedTimer() for _ in range(num - len(timers_list))])
+            timers_list[num - 1] = std_timer
+            await bulb.async_set_timers(timers_list)
 
     if options.showtimers:
         show_timers = await bulb.async_get_timers()

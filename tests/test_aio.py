@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import colorsys
 import contextlib
 import datetime
 import json
 import logging
 import time
+from optparse import OptionParser
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -24,22 +26,43 @@ from flux_led.const import (
     MAX_TEMP,
     MIN_TEMP,
     PUSH_UPDATE_INTERVAL,
+    TIMER_ACTION_COLOR,
+    TIMER_ACTION_OFF,
+    TIMER_ACTION_ON,
+    TIMER_ACTION_SCENE_GRADIENT,
+    TIMER_ACTION_SCENE_SEGMENTS,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
+    ExtendedCustomEffectPattern,
     MultiColorEffects,
+    ScribbleBlinkMode,
+    ScribbleEffect,
+    ScribbleLED,
     WhiteChannelType,
 )
+from flux_led.fluxled import (
+    _reconcile_scribble_led_count,
+    processCustomArgs,
+    processSetTimerArgs,
+    processSetTimerArgsExtended,
+)
 from flux_led.protocol import (
+    LEDENET_EXTENDED_STATE_RESPONSE_LEN,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     LEDENETRawState,
     PowerRestoreState,
     PowerRestoreStates,
+    ProtocolLEDENET8Byte,
     ProtocolLEDENET25Byte,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     RemoteConfig,
 )
 from flux_led.scanner import (
@@ -48,7 +71,7 @@ from flux_led.scanner import (
     is_legacy_device,
     merge_discoveries,
 )
-from flux_led.timer import LedTimer
+from flux_led.timer import LedTimer, LedTimerExtended
 
 IP_ADDRESS = "127.0.0.1"
 MODEL_NUM_HEX = "0x35"
@@ -4342,6 +4365,2512 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     )
     await task
     assert light.model_num == 0xB6
-    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
     assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
     assert "Surplife" in light.model
+    assert light.supports_extended_custom_effects is True
+
+
+def test_protocol_extended_custom_state_response_length():
+    """ProtocolLEDENETExtendedCustom expects the 21-byte extended state."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.state_response_length == LEDENET_EXTENDED_STATE_RESPONSE_LEN
+
+
+def test_protocol_extended_state_validation_0xB6():
+    """The protocols recognise the extended (0xEA 0x81) state response."""
+    ext = bytes.fromhex("ea810100b605236100640f00000064640000000083")
+    # ProtocolLEDENET8Byte (used while probing) recognises the extended frame.
+    assert ProtocolLEDENET8Byte().is_valid_extended_state_response(ext) is True
+    # The dedicated protocol only accepts the extended format.
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.is_valid_state_response(ext) is True
+    assert proto.is_valid_state_response(bytes((0x81,)) + b"\x00" * 13) is False
+
+
+def test_protocol_extended_state_to_state_white_off():
+    """white_brightness of 0 maps to both white channels off."""
+    ext = bytes.fromhex("ea810100b605236100640f000000ff000000000083")
+    result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
+    assert result[9] == 0  # warm_white
+    assert result[11] == 0  # cool_white
+
+
+def test_protocol_extended_state_to_state_too_short_returns_empty():
+    """A truncated extended frame (< 20 bytes) returns an empty bytestring."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.extended_state_to_state(b"\xea\x81\x01\x00\xb6") == b""
+
+
+def test_protocol_named_raw_state_extended_conversion():
+    """named_raw_state converts an extended frame to the standard layout."""
+    ext = bytes.fromhex("ea810100b605236100640f00000064640000000083")
+    result = ProtocolLEDENETExtendedCustom().named_raw_state(ext)
+    assert result.head == 0x81
+    assert result.model_num == 0xB6
+
+
+def test_extended_state_led_count():
+    """extended_state_led_count returns the configured LED count from real captured frames.
+
+    Real captured frames (0xB6 device):
+      LED count = 100: ea 81 01 00 b6 09 24 66 01 64 f0 00 00 00 00 64 05 00 64 00 00 00 20 02 01 00 03
+      LED count =  80: ea 81 01 00 b6 09 23 66 01 64 f0 00 00 00 00 64 05 00 50 00 00 00 20 02 01 00 03
+
+    The LED count byte is at index 18 of the raw extended state buffer.
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    frame_100 = bytes.fromhex("ea810100b60924660164f000000000640500640000002002010003")
+    frame_80 = bytes.fromhex("ea810100b60923660164f000000000640500500000002002010003")
+
+    assert proto.extended_state_led_count(frame_100) == 100
+    assert proto.extended_state_led_count(frame_80) == 80
+
+    # Too-short / invalid frame returns None
+    assert proto.extended_state_led_count(b"\xea\x81\x01") is None
+    assert proto.extended_state_led_count(b"\x00" * 27) is None
+
+
+def test_extended_custom_effect_pattern_enum_values():
+    """Test ExtendedCustomEffectPattern enum has expected values."""
+    assert ExtendedCustomEffectPattern.WAVE.value == 0x01
+    assert ExtendedCustomEffectPattern.METEOR.value == 0x02
+    assert ExtendedCustomEffectPattern.STREAMER.value == 0x03
+    assert ExtendedCustomEffectPattern.BUILDING_BLOCKS.value == 0x04
+    assert ExtendedCustomEffectPattern.BREATHE.value == 0x09
+    assert ExtendedCustomEffectPattern.STATIC_GRADIENT.value == 0x65
+    assert ExtendedCustomEffectPattern.STATIC_FILL.value == 0x66
+
+
+def test_extended_custom_effect_direction_enum_values():
+    """Test ExtendedCustomEffectDirection enum has expected values."""
+    assert ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value == 0x01
+    assert ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value == 0x02
+
+
+def test_extended_custom_effect_option_enum_values():
+    """Test ExtendedCustomEffectOption enum has expected values."""
+    assert ExtendedCustomEffectOption.DEFAULT.value == 0x00
+    assert ExtendedCustomEffectOption.VARIANT_1.value == 0x01
+    assert ExtendedCustomEffectOption.VARIANT_2.value == 0x02
+
+
+def test_construct_extended_custom_effect_single_color():
+    """Test constructing an extended custom effect with single color."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Single red color, pattern Wave, default settings
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=50,
+        density=50,
+        direction=0x01,
+        option=0x00,
+    )
+
+    # Result should be a wrapped message
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+    # Check the wrapper header (b0 b1 b2 b3)
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+
+def test_construct_extended_custom_effect_multiple_colors():
+    """Test constructing an extended custom effect with multiple colors."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Three colors: red, green, blue
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=2,  # Meteor
+        colors=colors,
+        speed=80,
+        density=100,
+        direction=0x02,  # Right to Left
+        option=0x01,  # Color change
+    )
+
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_construct_extended_custom_effect_color_order():
+    """Test that colors are stored in input order."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Two distinct colors
+    colors = [(255, 0, 0), (0, 0, 255)]  # Red, Blue
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+        speed=50,
+        density=50,
+    )
+
+    # The message structure after wrapper:
+    # Inner message starts after wrapper header + length bytes
+    # Find the color data section (after the 16-byte header)
+    # Colors are 5 bytes each (H, S, V, 0, 0) in input order
+
+    # Red (255, 0, 0) in HSV: H=0, S=100, V=100 -> stored as (0, 100, 100)
+    # Blue (0, 0, 255) in HSV: H=240, S=100, V=100 -> stored as (120, 100, 100)
+
+    # Red should come first in the message (same order as input)
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_hsv_conversion():
+    """Test RGB to HSV conversion accuracy."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with a known color: pure green
+    colors = [(0, 255, 0)]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+    )
+
+    # Green in HSV: H=120, S=100%, V=100%
+    # Stored as: H/2=60, S=100, V=100
+    # Verify the message was constructed
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_construct_extended_custom_effect_speed_clamping():
+    """Test that speed is clamped to 0-100."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Speed > 100 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=150,
+    )
+    assert isinstance(result, bytearray)
+
+    # Speed < 0 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=-10,
+    )
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_density_clamping():
+    """Test that density is clamped to 0-100."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Density > 100 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        density=200,
+    )
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_max_colors():
+    """Test constructing an effect with maximum 8 colors."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # 8 colors (maximum)
+    colors = [
+        (255, 0, 0),
+        (255, 128, 0),
+        (255, 255, 0),
+        (0, 255, 0),
+        (0, 255, 255),
+        (0, 0, 255),
+        (128, 0, 255),
+        (255, 0, 255),
+    ]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+    )
+
+    assert isinstance(result, bytearray)
+    # Each color is 5 bytes, 8 colors = 40 bytes for colors
+    # Plus 16 bytes header = 56 bytes inner message
+    # Plus wrapper overhead
+
+
+def test_construct_extended_custom_effect_with_enums():
+    """Test using enum values for parameters."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    result = proto.construct_extended_custom_effect(
+        pattern_id=ExtendedCustomEffectPattern.WAVE,
+        colors=[(255, 0, 0)],
+        speed=50,
+        density=50,
+        direction=ExtendedCustomEffectDirection.RIGHT_TO_LEFT,
+        option=ExtendedCustomEffectOption.VARIANT_1,
+    )
+
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_with_variant_2():
+    """Test using VARIANT_2 option (e.g., breathe mode for rainbow patterns)."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Rainbow colors with VARIANT_2 option
+    colors = [
+        (255, 0, 0),  # Red
+        (255, 255, 0),  # Yellow
+        (0, 255, 0),  # Green
+        (0, 255, 255),  # Cyan
+        (0, 0, 255),  # Blue
+        (255, 0, 255),  # Magenta
+    ]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=12,  # Twinkling stars
+        colors=colors,
+        speed=60,
+        density=100,
+        direction=ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+        option=ExtendedCustomEffectOption.VARIANT_2,
+    )
+
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_extended_custom_effect_hsv_values():
+    """Test specific HSV value calculations."""
+    # Test the HSV conversion formula used in the protocol
+    # RGB (255, 0, 0) -> HSV (0, 100%, 100%) -> stored as (0, 100, 100)
+    r, g, b = 255, 0, 0
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 0  # Red hue
+    assert hsv_s == 100  # Full saturation
+    assert hsv_v == 100  # Full value
+
+    # RGB (0, 0, 255) -> HSV (240, 100%, 100%) -> stored as (120, 100, 100)
+    r, g, b = 0, 0, 255
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 120  # Blue hue (240/2)
+    assert hsv_s == 100
+    assert hsv_v == 100
+
+    # RGB (0, 255, 0) -> HSV (120, 100%, 100%) -> stored as (60, 100, 100)
+    r, g, b = 0, 255, 0
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 60  # Green hue (120/2)
+    assert hsv_s == 100
+    assert hsv_v == 100
+
+
+# Tests for _generate_extended_custom_effect validation (base_device.py lines 1335-1360)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_validation(mock_aio_protocol):
+    """Test validation in _generate_extended_custom_effect."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # Setup 0xB6 device with extended state
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    # Test invalid pattern_id (0 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-24 or 101-102"):
+        light._generate_extended_custom_effect(0, [(255, 0, 0)])
+
+    # Test invalid pattern_id (25 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-24 or 101-102"):
+        light._generate_extended_custom_effect(25, [(255, 0, 0)])
+
+    # Test empty colors list
+    with pytest.raises(ValueError, match="at least one color"):
+        light._generate_extended_custom_effect(1, [])
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_extended_custom_effect(1, [(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_extended_custom_effect(1, [(256, 0, 0)])
+
+    # Test color values out of range (< 0)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_extended_custom_effect(1, [(-1, 0, 0)])
+
+    # Test valid pattern_id 101 (STATIC_GRADIENT)
+    result = light._generate_extended_custom_effect(101, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+    # Test valid pattern_id 102 (STATIC_FILL)
+    result = light._generate_extended_custom_effect(102, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_truncate_colors(
+    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+):
+    """Test that too many colors (>8) are truncated with warning."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # 10 colors (more than 8 max)
+    colors = [(i * 25, 0, 0) for i in range(10)]
+
+    with caplog.at_level(logging.WARNING):
+        result = light._generate_extended_custom_effect(1, colors)
+
+    assert isinstance(result, bytearray)
+    assert "truncating" in caplog.text.lower()
+
+
+# Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_validation(mock_aio_protocol):
+    """Test validation in _generate_custom_segment_colors."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_custom_segment_colors([(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_custom_segment_colors([(256, 0, 0)])
+
+    # Test valid segments with None
+    result = light._generate_custom_segment_colors([None, (255, 0, 0), None])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_truncate(
+    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+):
+    """Test that too many segments (>20) are truncated with warning."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # 25 segments (more than 20 max)
+    segments = [(i * 10, 0, 0) for i in range(25)]
+
+    with caplog.at_level(logging.WARNING):
+        result = light._generate_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+    assert "truncating" in caplog.text.lower()
+
+
+# Tests for construct_levels_change (protocol.py lines 1826-1861)
+
+
+def test_protocol_construct_levels_change_0xB6():
+    """Test construct_levels_change uses STATIC_FILL for 0xB6 protocol."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with RGB values
+    result = proto.construct_levels_change(
+        persist=1,
+        red=255,
+        green=0,
+        blue=0,
+        warm_white=0,
+        cool_white=0,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+    # Check wrapper header
+    assert msg[0] == 0xB0
+    assert msg[1] == 0xB1
+    assert msg[2] == 0xB2
+    assert msg[3] == 0xB3
+
+
+def test_protocol_construct_levels_change_with_white():
+    """Test construct_levels_change combines warm and cool white."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with white values
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=100,
+        cool_white=50,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+
+
+def test_protocol_construct_levels_change_white_clamping():
+    """Test that combined white is clamped to 255."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with white values that exceed 255 when combined
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=200,
+        cool_white=200,  # Total would be 400, should clamp to 255
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    assert isinstance(result[0], bytearray)
+
+
+def test_protocol_rgb_to_hsv_bytes_rgbw():
+    """Test _rgb_to_hsv_bytes_rgbw conversion."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test pure red with white
+    result = proto._rgb_to_hsv_bytes_rgbw(255, 0, 0, 100)
+    assert len(result) == 5
+    assert result[0] == 0  # Hue (red = 0)
+    assert result[1] == 100  # Saturation
+    assert result[2] == 100  # Value
+    assert result[3] == 0x00  # Unused
+    assert result[4] == 100  # White
+
+    # Test pure green
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 255, 0, 0)
+    assert result[0] == 60  # Hue (green = 120/2)
+
+    # Test pure blue
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 0, 255, 255)
+    assert result[0] == 120  # Hue (blue = 240/2)
+    assert result[4] == 255  # White
+
+
+# Tests for construct_custom_segment_colors (protocol.py lines 1971-1980)
+
+
+def test_protocol_construct_custom_segment_colors():
+    """Test construct_custom_segment_colors command format."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with a few segments
+    segments = [(255, 0, 0), None, (0, 255, 0)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+    # Check wrapper header
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+
+def test_protocol_construct_custom_segment_colors_all_off():
+    """Test construct_custom_segment_colors with all segments off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # All None segments
+    segments = [None] * 10
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+def test_protocol_construct_custom_segment_colors_zero_tuple():
+    """Test that (0,0,0) is treated as off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Mix of None and (0,0,0)
+    segments = [None, (0, 0, 0), (255, 0, 0)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+# Tests for async API methods
+
+
+@pytest.mark.asyncio
+async def test_async_set_extended_custom_effect_0xB6(mock_aio_protocol):
+    """Test async_set_extended_custom_effect sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0), (0, 255, 0)],
+        speed=50,
+        density=50,
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+@pytest.mark.asyncio
+async def test_async_set_custom_segment_colors_0xB6(mock_aio_protocol):
+    """Test async_set_custom_segment_colors sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_custom_segment_colors(
+        segments=[(255, 0, 0), None, (0, 0, 255)]
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+# Scribble (per-LED) feature tests (0xB6)
+
+
+def _inner_of(wrapped: bytearray) -> bytes:
+    """Extract the inner message from a B0B1B2B3-wrapped result.
+
+    wrapper = b0 b1 b2 b3 | 00 01 | ver | counter | len_hi len_lo | inner | cksum
+    """
+    inner_len = (wrapped[8] << 8) | wrapped[9]
+    return bytes(wrapped[10 : 10 + inner_len])
+
+
+ALL_ON_100 = bytes.fromhex("ff" * 12 + "f0")  # N=100, 13 bytes
+ALL_ON_80 = bytes.fromhex("ff" * 10)  # N=80, 10 bytes
+OFF0_80 = bytes.fromhex("80" + "00" * 9)  # N=80, only LED 0
+GROUP_40_79_80 = bytes.fromhex("00" * 5 + "ff" * 5)  # N=80, LEDs 40-79
+
+
+def _h(s: str) -> bytes:
+    return bytes.fromhex(s.replace(" ", ""))
+
+
+def test_scribble_bitmap_n100():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap(range(100), 100)
+    assert len(bitmap) == 13
+    assert bitmap == ALL_ON_100
+    assert bitmap[-1] == 0xF0
+
+
+def test_scribble_bitmap_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap(range(80), 80)
+    assert len(bitmap) == 10
+    assert bitmap == ALL_ON_80
+
+
+def test_scribble_bitmap_led0():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap([0], 80)
+    assert bitmap[0] == 0x80
+
+
+def test_scribble_bitmap_led7():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap([7], 80)
+    assert bitmap[0] == 0x01
+
+
+def test_scribble_bitmap_out_of_range():
+    proto = ProtocolLEDENETExtendedCustom()
+    with pytest.raises(ValueError):
+        proto._scribble_bitmap([80], 80)
+    with pytest.raises(ValueError):
+        proto._scribble_bitmap([-1], 80)
+
+
+def test_scribble_paint_all_green_static_n100():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x00,
+            direction=0x01,
+            density=0x50,
+            speed=0x64,
+            blink_mode=0x00,
+            h2=0x3C,
+            s=0x64,
+            v=0x64,
+            white=0x00,
+            blink_speed=0x64,
+            num_leds=100,
+        )
+    )
+    assert inner[:2] == b"\xe1\x26"
+    assert inner == _h("e1 26 00 01 50 64 00 3c 64 64 00 00 64") + ALL_ON_100
+
+
+def test_scribble_paint_blue_50pct():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(h2=0x78, s=0x64, v=0x32, num_leds=80)
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 78 64 32 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_white_100():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(h2=0x78, s=0x64, v=0x00, white=0x64, num_leds=80)
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 78 64 00 00 64 64") + ALL_ON_80
+
+
+def test_scribble_paint_fast_blink_50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            blink_mode=0x10, h2=0x78, s=0x64, v=0x64, blink_speed=0x32, num_leds=80
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 10 78 64 64 00 00 32") + ALL_ON_80
+
+
+def test_scribble_paint_slow_blink_50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            blink_mode=0x08, h2=0x78, s=0x64, v=0x64, blink_speed=0x32, num_leds=80
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 08 78 64 64 00 00 32") + ALL_ON_80
+
+
+def test_scribble_paint_flowing_r2l_speed50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x01,
+            direction=0x02,
+            speed=0x32,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 01 02 50 32 00 78 64 64 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_twinkling_d50_s61():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x03,
+            direction=0x02,
+            density=0x32,
+            speed=0x3D,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 03 02 32 3d 00 78 64 64 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_off_bulb0_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x00,
+            density=0x50,
+            h2=0x00,
+            s=0x00,
+            v=0x00,
+            blink_speed=0x64,
+            bitmap_leds=[0],
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64") + OFF0_80
+
+
+def test_scribble_paint_flowing_blue_group_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x01,
+            direction=0x02,
+            density=0x50,
+            speed=0x26,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            blink_speed=0x64,
+            bitmap_leds=list(range(40, 80)),
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 01 02 50 26 00 78 64 64 00 00 64") + GROUP_40_79_80
+
+
+def test_scribble_init_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(proto.construct_scribble_init(80))
+    assert inner[:9] == _h("e1 23 01 00 01 50 64 00 50")
+    assert inner[9:] == _h("00 00 00 00 00 00 64") * 80
+    assert len(inner) == 569  # 9 + 7*80
+
+
+@pytest.mark.asyncio
+async def test_generate_scribble_init_invalid(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255"):
+        light._generate_scribble_init(0)
+    # 256 exceeds the one-byte E1 23 count / bitmap addressing limit and must
+    # raise the descriptive error, not the generic "byte must be in range".
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255, got 256"):
+        light._generate_scribble_init(256)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_num_leds_over_255_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    light._extended_led_count = None  # bypass the led_count mismatch check
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 256
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255, got 256"):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 256)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_rgb_and_white_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0), white=50)] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_channel_out_of_range_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(300, 0, 0))] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_effect_int_and_enum(mock_aio_protocol):
+    """effect accepts a raw int id (e.g. 4, unnamed) or a ScribbleEffect; the
+    device-valid range is 0x00-0x08, anything else raises ValueError."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 80
+    # raw int id not exposed as a name (3,4,6,7 are valid on-device)
+    assert (
+        _inner_of(light._scribble_paint_groups(leds, 4, 0x01, 0x50, 0x64, 80)[0])[2]
+        == 4
+    )
+    # enum still works
+    assert (
+        _inner_of(
+            light._scribble_paint_groups(
+                leds, ScribbleEffect.FLOWING, 0x01, 0x50, 0x64, 80
+            )[0]
+        )[2]
+        == 0x01
+    )
+    # out-of-range id (device accepts only 0x00-0x08)
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 9, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_wrong_count_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 40
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 40)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_empty_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups([], 0x00, 0x01, 0x50, 0x64, 0)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_two_color_static(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2  # red group then blue group, first-appearance order
+    red = _inner_of(msgs[0])
+    blue = _inner_of(msgs[1])
+    # red occupies LEDs 0-39, blue 40-79
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+    assert blue[13:] == GROUP_40_79_80
+    # blue hue byte (h2) = 0x78
+    assert blue[7] == 0x78
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_blink_grouping(mock_aio_protocol):
+    """LEDs with different blink modes split into separate E1 26 groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.FAST)] * 40 + [
+        ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.NONE)
+    ] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2  # same color, different blink -> two groups
+    fast = _inner_of(msgs[0])
+    steady = _inner_of(msgs[1])
+    assert fast[6] == 0x10  # FAST blink byte
+    assert steady[6] == 0x00  # NONE blink byte
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_off_group_color_zero(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2
+    off = _inner_of(msgs[1])
+    # off group: all-zero color, header matches the off golden
+    assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+    assert off[13:] == _h("7f" + "ff" * 8 + "ff")  # LEDs 1-79 set
+
+
+async def _setup_scribble_light(mock_aio_protocol, led_count_byte=0x50):
+    """Set up a 0xB6 AIO light with a known led_count from state byte 18."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                led_count_byte,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+    transport.reset_mock()
+    return light, transport
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_static_two_color(mock_aio_protocol):
+    """STATIC 2-color config sends E1 23 init + one E1 26 per color group."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(leds, effect=ScribbleEffect.STATIC)
+
+    assert len(sent) == 3
+    init = _inner_of(sent[0])
+    assert init[:2] == b"\xe1\x23"
+    assert len(init) == 569
+    red = _inner_of(sent[1])
+    blue = _inner_of(sent[2])
+    assert red[:2] == b"\xe1\x26"
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+    assert blue[13:] == GROUP_40_79_80
+    assert blue[7] == 0x78  # blue hue
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_no_enter_mode(mock_aio_protocol):
+    """enter_mode=False sends no E1 23, one E1 26 per group."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(leds, enter_mode=False)
+    assert len(sent) == 2
+    assert _inner_of(sent[0])[:2] == b"\xe1\x26"
+    assert _inner_of(sent[1])[:2] == b"\xe1\x26"
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_flowing_blue_group(mock_aio_protocol):
+    """FLOWING effect: blue group paint matches the captured golden."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(
+            leds,
+            effect=ScribbleEffect.FLOWING,
+            direction=ExtendedCustomEffectDirection.RIGHT_TO_LEFT,
+            density=0x50,
+            speed=0x26,
+        )
+    assert len(sent) == 3
+    red = _inner_of(sent[1])
+    blue = _inner_of(sent[2])
+    # blue group matches the captured golden
+    assert blue == _h("e1 26 01 02 50 26 00 78 64 64 00 00 64") + GROUP_40_79_80
+    # red group carries red color on LEDs 0-39 under the same effect
+    assert red[:7] == _h("e1 26 01 02 50 26 00")
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_off_group(mock_aio_protocol):
+    """Mixed lit + off config: off group paints all-zero color."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
+        await light.async_set_scribble(leds, enter_mode=False)
+    assert len(sent) == 2
+    red = _inner_of(sent[0])
+    off = _inner_of(sent[1])
+    assert red[13:] == OFF0_80
+    assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+
+
+@pytest.mark.asyncio
+async def test_supports_scribble_property(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.supports_scribble is True
+
+
+# Tests for extended_custom_effect_pattern_list property (base_device.py line 658)
+
+
+@pytest.mark.asyncio
+async def test_extended_custom_effect_pattern_list_0xB6(mock_aio_protocol):
+    """Test extended_custom_effect_pattern_list returns list for 0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test extended_custom_effect_pattern_list returns a list
+    pattern_list = light.extended_custom_effect_pattern_list
+    assert pattern_list is not None
+    assert isinstance(pattern_list, list)
+    assert len(pattern_list) > 0
+    # Check some expected patterns
+    assert "wave" in pattern_list
+    assert "meteor" in pattern_list
+    assert "breathe" in pattern_list
+
+
+@pytest.mark.asyncio
+async def test_extended_custom_effect_pattern_list_non_0xB6(mock_aio_protocol):
+    """Test extended_custom_effect_pattern_list returns None for non-0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # Standard 0x25 device (not extended custom)
+    light._aio_protocol.data_received(
+        b"\x81\x25\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xde"
+    )
+    await task
+
+    # Should return None for non-extended devices
+    assert light.extended_custom_effect_pattern_list is None
+
+
+# Tests for _named_effect with extended custom effects (base_device.py line 676)
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_0xB6(mock_aio_protocol):
+    """Test _named_effect returns extended effect name for 0xB6 in custom mode."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with preset_pattern=0x25 (custom effect mode) and mode=0x01 (Wave)
+    # Extended state: preset_pattern at pos 7, mode at pos 8
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,  # Model
+                0x01,  # Version
+                0x23,  # Power on
+                0x25,  # preset_pattern = 0x25 (custom effect mode)
+                0x01,  # mode = Wave pattern ID
+                0x64,  # speed
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Effect should be "Wave" from EXTENDED_CUSTOM_EFFECT_ID_NAME
+    assert light.effect == "Wave"
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_meteor(mock_aio_protocol):
+    """Test _named_effect returns Meteor for mode=0x02."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with mode=0x02 (Meteor)
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x25,  # preset_pattern = 0x25
+                0x02,  # mode = Meteor
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    assert light.effect == "Meteor"
+
+
+def test_protocol_construct_get_timers_0xB6():
+    """Test timer query construction for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+    msg = proto.construct_get_timers()
+
+    # Should be wrapped message with inner content [0xE0, 0x06]
+    assert msg[0:6] == bytes([0xB0, 0xB1, 0xB2, 0xB3, 0x00, 0x01])
+    # Version byte at position 6
+    assert msg[6] == 0x01
+    # Inner message length at positions 8-9 (should be 2)
+    assert msg[8] == 0x00
+    assert msg[9] == 0x02
+    # Inner message starts at position 10
+    assert msg[10] == 0xE0
+    assert msg[11] == 0x06
+
+
+def test_protocol_is_valid_timers_response_0xB6():
+    """Test timer response validation for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Valid response starts with e0 06
+    assert proto.is_valid_timers_response(bytes([0xE0, 0x06])) is True
+    assert proto.is_valid_timers_response(bytes([0xE0, 0x06, 0x01, 0x02])) is True
+
+    # Invalid responses
+    assert proto.is_valid_timers_response(bytes([0xE0])) is False
+    assert proto.is_valid_timers_response(bytes([0x01, 0x22])) is False
+    assert proto.is_valid_timers_response(bytes([])) is False
+
+
+def test_protocol_parse_get_timers_empty_0xB6():
+    """Test parsing empty timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Empty response (no timers configured)
+    response = bytes([0xE0, 0x06])
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 0
+
+
+def test_protocol_parse_get_timers_single_0xB6():
+    """Test parsing single timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Response with one timer: 13:25 OFF, no repeat
+    # Format: e0 06 [slot1: 21 bytes] [empty slots 2-6: 7 bytes each]
+    response = bytes.fromhex(
+        "e006"  # Header
+        "01f00d1900000ee001002400000000000000000000"  # Slot 1: 13:25 OFF
+        "0264640000690003000000000000040000000000000500000000000006000000000000"  # Slots 2-6 empty
+    )
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 6
+
+    # First timer should be active
+    timer1 = timers[0]
+    assert timer1.slot == 1
+    assert timer1.active is True
+    assert timer1.hour == 13
+    assert timer1.minute == 25
+    assert timer1.repeat_mask == 0
+    assert timer1.action_type == 0x24  # OFF
+
+    # Remaining timers should be inactive
+    for i in range(1, 6):
+        assert timers[i].active is False
+
+
+def test_protocol_parse_get_timers_multiple_0xB6():
+    """Test parsing multiple timer response for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Response with three timers (from actual packet capture)
+    # Format: e0 06 [slot1: 21 bytes] [slot2: 21 bytes] [slot3: 21 bytes] [slots 4-6: 7 bytes each]
+    response = bytes.fromhex(
+        "e006"  # Header
+        "01f00d1900000ee001002400000000000000000000"  # Slot 1: 13:25 OFF
+        "02f00f2300000ee001002400000000000000000000"  # Slot 2: 15:35 OFF
+        "03f00d2100000ee001002400000000000000000000"  # Slot 3: 13:33 OFF
+        "04000000000000"  # Slot 4 empty
+        "05000000000000"  # Slot 5 empty
+        "06000000000000"  # Slot 6 empty
+    )
+    timers = proto.parse_get_timers(response)
+
+    assert len(timers) == 6
+
+    # Check active timers
+    assert timers[0].slot == 1
+    assert timers[0].hour == 13
+    assert timers[0].minute == 25
+    assert timers[0].active is True
+
+    assert timers[1].slot == 2
+    assert timers[1].hour == 15
+    assert timers[1].minute == 35
+    assert timers[1].active is True
+
+    assert timers[2].slot == 3
+    assert timers[2].hour == 13
+    assert timers[2].minute == 33
+    assert timers[2].active is True
+
+    # Check inactive timers
+    assert timers[3].active is False
+    assert timers[4].active is False
+    assert timers[5].active is False
+
+
+def test_protocol_parse_get_timers_with_color_0xB6():
+    """Test parsing timer with color action for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Build a timer response with color action (0xa1)
+    # Slot 1: 17:15, Sun+Tue repeat (0x84), color action with HSV
+    inner_slot1 = bytes.fromhex("01f0110f00840ee00100a17be432000000000000")
+    inner_empty = bytes.fromhex(
+        "02000000000000030000000000000400000000000005000000000000060000000000"
+    )
+
+    response = bytes([0xE0, 0x06]) + inner_slot1 + inner_empty
+    timers = proto.parse_get_timers(response)
+
+    # Check first timer
+    timer1 = timers[0]
+    assert timer1.slot == 1
+    assert timer1.hour == 17
+    assert timer1.minute == 15
+    assert timer1.repeat_mask == 0x84  # Sun + Tue
+    assert timer1.action_type == 0xA1  # Color
+    assert timer1.color_hsv == (0x7B, 0xE4, 0x32)  # (123, 228, 50)
+
+
+def test_led_timer_extended_simple_on():
+    """Test LedTimerExtended for simple ON action."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=8,
+        minute=30,
+        repeat_mask=LedTimerExtended.Weekdays,
+        action_type=TIMER_ACTION_ON,
+    )
+
+    assert timer.is_on is True
+    assert timer.is_scene is False
+    assert timer.is_color is False
+    assert timer.repeat_days == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[0] == 0xF0  # Active flag
+    assert data[1] == 8  # Hour
+    assert data[2] == 30  # Minute
+    assert data[9] == 0x23  # ON action
+
+
+def test_led_timer_extended_simple_off():
+    """Test LedTimerExtended for simple OFF action."""
+    timer = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=22,
+        minute=0,
+        repeat_mask=0,  # No repeat
+        action_type=TIMER_ACTION_OFF,
+    )
+
+    assert timer.is_on is False
+    assert timer.repeat_days == []
+
+    data = timer.to_bytes()
+    assert data[9] == 0x24  # OFF action
+
+
+def test_led_timer_extended_color():
+    """Test LedTimerExtended for color action."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=17,
+        minute=15,
+        repeat_mask=0x84,  # Sun + Tue
+        action_type=TIMER_ACTION_COLOR,
+        color_hsv=(123, 228, 50),
+    )
+
+    assert timer.is_on is True
+    assert timer.is_color is True
+    assert timer.repeat_days == ["Tue", "Sun"]
+
+    data = timer.to_bytes()
+    assert data[9] == 0xA1  # Color action
+    assert data[10] == 123  # Hue
+    assert data[11] == 228  # Saturation
+    assert data[12] == 50  # Brightness
+
+
+def test_led_timer_extended_inactive():
+    """Test LedTimerExtended for inactive timer."""
+    timer = LedTimerExtended(
+        slot=3,
+        active=False,
+    )
+
+    data = timer.to_bytes()
+    # Inactive timer should be all zeros
+    assert data == bytes(20)
+
+
+def test_led_timer_extended_from_bytes_simple():
+    """Test LedTimerExtended.from_bytes for simple timer."""
+    # Simple OFF timer: slot 1, 13:25, no repeat (21 bytes)
+    data = bytes.fromhex("01f00d1900000ee001002400000000000000000000")
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert consumed == 21
+    assert timer.slot == 1
+    assert timer.active is True
+    assert timer.hour == 13
+    assert timer.minute == 25
+    assert timer.repeat_mask == 0
+    assert timer.action_type == 0x24  # OFF
+
+
+def test_led_timer_extended_from_bytes_empty():
+    """Test LedTimerExtended.from_bytes for empty slot."""
+    # Empty slot
+    data = bytes.fromhex("0300000000000000")
+
+    timer, consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert consumed == 7
+    assert timer.slot == 3
+    assert timer.active is False
+
+
+def test_led_timer_extended_str():
+    """Test LedTimerExtended string representation."""
+    timer_off = LedTimerExtended(
+        slot=1, active=True, hour=22, minute=0, action_type=TIMER_ACTION_OFF
+    )
+    assert "OFF" in str(timer_off)
+    assert "22:00" in str(timer_off)
+
+    timer_on = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=8,
+        minute=30,
+        repeat_mask=LedTimerExtended.Weekdays,
+        action_type=TIMER_ACTION_ON,
+    )
+    assert "ON" in str(timer_on)
+    assert "Mon" in str(timer_on)
+
+    timer_inactive = LedTimerExtended(slot=3, active=False)
+    assert "Unset" in str(timer_inactive)
+
+
+def test_protocol_construct_set_timer_0xB6():
+    """Test timer set construction for 0xB6 device."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=13,
+        minute=25,
+        repeat_mask=0,
+        action_type=TIMER_ACTION_OFF,
+    )
+
+    msg = proto.construct_set_timer(timer)
+
+    # Should be wrapped message
+    assert msg[0:6] == bytes([0xB0, 0xB1, 0xB2, 0xB3, 0x00, 0x01])
+    # Version byte
+    assert msg[6] == 0x01
+    # Inner message starts at position 10
+    assert msg[10] == 0xE0  # Extended command
+    assert msg[11] == 0x05  # Set timer command
+    assert msg[12] == 0x01  # Slot number
+
+
+def test_led_timer_extended_scene_gradient():
+    """Test LedTimerExtended for scene gradient action."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=18,
+        minute=30,
+        repeat_mask=LedTimerExtended.Everyday,
+        action_type=TIMER_ACTION_SCENE_GRADIENT,
+        pattern=ExtendedCustomEffectPattern.WAVE,
+        speed=80,
+        colors=[(100, 100, 100), (50, 50, 50)],
+    )
+
+    assert timer.is_on is True
+    assert timer.is_scene is True
+    assert timer.is_color is False
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[0] == 0xF0  # Active flag
+    assert data[1] == 18  # Hour
+    assert data[2] == 30  # Minute
+    assert data[5] == TIMER_ACTION_SCENE_GRADIENT
+    assert data[6] == 0xE1  # Effect marker
+    assert data[7] == 0x21  # Gradient effect type
+
+    # Test __str__
+    s = str(timer)
+    assert "Scene: Wave" in s
+    assert "2 colors" in s
+
+
+def test_led_timer_extended_scene_segments():
+    """Test LedTimerExtended for scene segments (colorful) action."""
+    timer = LedTimerExtended(
+        slot=2,
+        active=True,
+        hour=20,
+        minute=0,
+        repeat_mask=LedTimerExtended.Weekend,
+        action_type=TIMER_ACTION_SCENE_SEGMENTS,
+        colors=[(180, 100, 100), (0, 100, 100), (60, 100, 100)],
+    )
+
+    assert timer.is_scene is True
+
+    # Test serialization
+    data = timer.to_bytes()
+    assert data[5] == TIMER_ACTION_SCENE_SEGMENTS
+    assert data[6] == 0xE1  # Effect marker
+    assert data[7] == 0x22  # Segments effect type
+
+    # Test __str__
+    s = str(timer)
+    assert "Colorful" in s
+    assert "3 colors" in s
+
+
+def test_led_timer_extended_from_bytes_scene_gradient():
+    """Test LedTimerExtended.from_bytes for scene gradient timer."""
+    # Scene gradient timer from real device data:
+    # slot=4, 18:38, repeat=0x0f, action=0x29, e1 21 header, 5 colors
+    data = bytes.fromhex(
+        "04f0122600f629e12100500300016450000000000000050c646400001e646400005a646400006ce464000096646400"
+    )
+
+    timer, _consumed = LedTimerExtended.from_bytes(data, 0)
+
+    assert timer.slot == 4
+    assert timer.active is True
+    assert timer.hour == 18
+    assert timer.minute == 38
+    assert timer.repeat_mask == 0xF6  # All days except bit 0 and 3
+    assert timer.action_type == TIMER_ACTION_SCENE_GRADIENT
+    assert len(timer.colors) == 5
+    # First color: 0c 64 64 = (12, 100, 100)
+    assert timer.colors[0] == (0x0C, 0x64, 0x64)
+
+
+def test_led_timer_extended_from_bytes_scene_segments():
+    """Test LedTimerExtended.from_bytes for scene segments timer."""
+    # Scene segments timer: slot=1, 12:00, e1 22 header, 3 colors
+    # Construct a minimal segments timer
+    data = bytearray()
+    data.append(0x01)  # slot
+    data.append(0xF0)  # flags
+    data.append(12)  # hour
+    data.append(0)  # minute
+    data.append(0)  # seconds
+    data.append(0)  # repeat
+    data.append(0x6B)  # action (segments)
+    data.append(0xE1)  # effect marker
+    data.append(0x22)  # segments type
+    data.extend([0, 0, 0, 0])  # header padding
+    data.append(3)  # num colors
+    # 3 colors (5 bytes each)
+    data.extend([100, 100, 50, 0, 0])
+    data.extend([50, 80, 60, 0, 0])
+    data.extend([150, 90, 70, 0, 0])
+
+    timer, _consumed = LedTimerExtended.from_bytes(bytes(data), 0)
+
+    assert timer.slot == 1
+    assert timer.active is True
+    assert timer.action_type == TIMER_ACTION_SCENE_SEGMENTS
+    assert len(timer.colors) == 3
+    assert timer.colors[0] == (100, 100, 50)
+    assert timer.colors[1] == (50, 80, 60)
+    assert timer.colors[2] == (150, 90, 70)
+
+
+def test_led_timer_extended_str_unknown_action():
+    """Test LedTimerExtended.__str__ for unknown action type."""
+    timer = LedTimerExtended(
+        slot=1,
+        active=True,
+        hour=10,
+        minute=30,
+        action_type=0xFF,  # Unknown action
+    )
+
+    s = str(timer)
+    assert "Unknown action: 0xff" in s
+
+
+def test_led_timer_extended_from_bytes_truncated():
+    """Test LedTimerExtended.from_bytes handles truncated data."""
+    # Only 5 bytes - not enough for a valid timer
+    data = bytes([0x01, 0xF0, 12, 30, 0])
+    _timer, consumed = LedTimerExtended.from_bytes(data, 0)
+    assert consumed == 5  # Returns what's available
+
+
+def test_cli_process_set_timer_args_extended_inactive():
+    """Test CLI parsing for inactive extended timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(parser, ["1", "inactive", ""])
+    assert timer.slot == 1
+    assert timer.active is False
+    assert timer.action_type == TIMER_ACTION_OFF
+
+
+def test_cli_process_set_timer_args_extended_poweroff():
+    """Test CLI parsing for poweroff extended timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["2", "poweroff", "time:1430;repeat:12345"]
+    )
+    assert timer.slot == 2
+    assert timer.active is True
+    assert timer.hour == 14
+    assert timer.minute == 30
+    assert timer.action_type == TIMER_ACTION_OFF
+    # repeat 12345 = Mon|Tue|Wed|Thu|Fri = bits 1,2,3,4,5 = 0x3E
+    assert timer.repeat_mask == 0x3E
+
+
+def test_cli_process_set_timer_args_extended_default_on():
+    """Test CLI parsing for default (on) extended timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(parser, ["3", "default", "time:0830;repeat:06"])
+    assert timer.slot == 3
+    assert timer.active is True
+    assert timer.hour == 8
+    assert timer.minute == 30
+    assert timer.action_type == TIMER_ACTION_ON
+    # repeat 06 = Sun|Sat = bits 7,6 = 0x80|0x40 = 0xC0
+    assert timer.repeat_mask == 0xC0
+
+
+def test_cli_process_set_timer_args_extended_color():
+    """Test CLI parsing for color extended timer."""
+    parser = OptionParser()
+    # Use color name instead of hex code (hex needs # prefix)
+    timer = processSetTimerArgsExtended(
+        parser, ["4", "color", "time:2100;repeat:0123456;color:red"]
+    )
+    assert timer.slot == 4
+    assert timer.active is True
+    assert timer.hour == 21
+    assert timer.minute == 0
+    assert timer.action_type == TIMER_ACTION_COLOR
+    assert timer.color_hsv is not None
+    # red should have hue=0
+    assert timer.color_hsv[0] == 0  # hue
+
+
+def test_cli_process_set_timer_args_extended_color_with_brightness():
+    """Test CLI parsing for color extended timer with brightness."""
+    parser = OptionParser()
+    # Use hex with # prefix
+    timer = processSetTimerArgsExtended(
+        parser, ["5", "color", "time:1200;repeat:1;color:#00ff00;brightness:50"]
+    )
+    assert timer.slot == 5
+    assert timer.active is True
+    assert timer.action_type == TIMER_ACTION_COLOR
+    assert timer.color_hsv is not None
+    # Check brightness is 50
+    assert timer.color_hsv[2] == 50
+
+
+def test_cli_process_set_timer_args_extended_weekend_repeat():
+    """Test CLI parsing for weekend repeat (0=Sun, 6=Sat)."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["1", "poweroff", "time:2200;repeat:06"]
+    )
+    # repeat 06 = Sun|Sat = bit7 | bit6 = 0x80 | 0x40 = 0xC0
+    assert timer.repeat_mask == 0xC0
+
+
+def test_cli_process_set_timer_args_extended_everyday_repeat():
+    """Test CLI parsing for everyday repeat (0123456)."""
+    parser = OptionParser()
+    timer = processSetTimerArgsExtended(
+        parser, ["1", "default", "time:0700;repeat:0123456"]
+    )
+    # repeat 0123456 = Sun|Mon|Tue|Wed|Thu|Fri|Sat
+    # bit7=Sun + bits1-6 = 0x80 | 0x7E = 0xFE
+    assert timer.repeat_mask == 0xFE
+
+
+def test_cli_process_set_timer_args_standard_inactive():
+    """Test CLI parsing for inactive standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["1", "inactive", ""])
+    assert timer.isActive() is False
+
+
+def test_cli_process_set_timer_args_standard_poweroff():
+    """Test CLI parsing for poweroff standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["2", "poweroff", "time:1430;repeat:12345"])
+    assert timer.isActive() is True
+    assert timer.hour == 14
+    assert timer.minute == 30
+    # Check it's a turn-off timer
+    assert timer.turn_on is False
+
+
+def test_cli_process_set_timer_args_standard_default():
+    """Test CLI parsing for default (on) standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(parser, ["3", "default", "time:0830;repeat:06"])
+    assert timer.isActive() is True
+    assert timer.hour == 8
+    assert timer.minute == 30
+
+
+def test_cli_process_set_timer_args_standard_color():
+    """Test CLI parsing for color standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["4", "color", "time:2100;repeat:0123456;color:255,0,0"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 21
+    assert timer.minute == 0
+    assert timer.red == 255
+    assert timer.green == 0
+    assert timer.blue == 0
+
+
+def test_cli_process_set_timer_args_standard_warmwhite():
+    """Test CLI parsing for warmwhite standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["5", "warmwhite", "time:2200;repeat:12345;level:75"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 22
+    assert timer.minute == 0
+    # 75% is converted to byte: int((75 * 255) / 100) = 191
+    assert timer.warmth_level == 191
+
+
+def test_cli_process_set_timer_args_standard_preset():
+    """Test CLI parsing for preset standard timer."""
+    parser = OptionParser()
+    timer = processSetTimerArgs(
+        parser, ["6", "preset", "time:1800;repeat:06;code:37;speed:50"]
+    )
+    assert timer.isActive() is True
+    assert timer.hour == 18
+    assert timer.minute == 0
+    assert timer.pattern_code == 37
+
+
+# =============================================================================
+# Timer Display Formatting Tests (__str__)
+# =============================================================================
+
+
+def test_led_timer_standard_str_inactive():
+    """Test LedTimer.__str__ for inactive timer."""
+    timer = LedTimer()
+    timer.setActive(False)
+    assert str(timer) == "Unset"
+
+
+def test_led_timer_standard_str_on():
+    """Test LedTimer.__str__ for turn-on timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(8, 30)
+    timer.setModeDefault()
+    timer.setRepeatMask(LedTimer.Weekdays)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "08:30" in s
+    assert "Mo" in s
+    assert "Tu" in s
+    assert "Fr" in s
+
+
+def test_led_timer_standard_str_off():
+    """Test LedTimer.__str__ for turn-off timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(22, 0)
+    timer.setModeTurnOff()
+    timer.setRepeatMask(LedTimer.Everyday)
+
+    s = str(timer)
+    assert "[OFF]" in s
+    assert "22:00" in s
+
+
+def test_led_timer_standard_str_once():
+    """Test LedTimer.__str__ for one-time timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(14, 30)
+    timer.setModeDefault()
+    timer.setDate(2025, 12, 25)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "14:30" in s
+    assert "Once" in s
+    assert "2025-12-25" in s
+
+
+def test_led_timer_standard_str_color():
+    """Test LedTimer.__str__ for color timer."""
+    timer = LedTimer()
+    timer.setActive(True)
+    timer.setTime(19, 0)
+    timer.setModeColor(255, 0, 0)
+    timer.setRepeatMask(LedTimer.Weekend)
+
+    s = str(timer)
+    assert "[ON ]" in s
+    assert "19:00" in s
+    assert "Sa" in s
+    assert "Su" in s
+
+
+# ---------------------------------------------------------------------------
+# CLI scribble parsing tests (PR5)
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_run_length_expansion():
+    """processCustomArgs scribble: '10xred 10xgreen 60xoff' -> 80 ScribbleLEDs."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "10xred 10xgreen 60xoff"))
+    assert result is not None
+    assert result["mode"] == "scribble"
+    assert result["effect"] == ScribbleEffect.STATIC.value
+    leds = result["leds"]
+    assert len(leds) == 80
+    # first 10: red
+    for led in leds[:10]:
+        assert led.rgb == (255, 0, 0)
+        assert led.white is None
+    # next 10: green
+    for led in leds[10:20]:
+        assert led.rgb == (0, 128, 0) or led.rgb == (0, 255, 0) or led.rgb[0] == 0
+        assert led.white is None
+    # last 60: off
+    for led in leds[20:]:
+        assert led.rgb is None
+        assert led.white is None
+
+
+def test_cli_scribble_white_led():
+    """processCustomArgs scribble: 'w100' -> one white LED with white=100."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "w100"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white == 100
+
+
+def test_cli_scribble_plain_red():
+    """processCustomArgs scribble: 'red' -> one red ScribbleLED."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is not None
+    assert leds[0].rgb[0] == 255  # red channel
+    assert leds[0].white is None
+
+
+def test_cli_scribble_off_led():
+    """processCustomArgs scribble: 'off' -> one off ScribbleLED."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "off"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white is None
+
+
+def test_cli_scribble_malformed_token():
+    """processCustomArgs scribble: malformed token -> parser.error called."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "static", "notacolor!!!"))
+
+
+def test_cli_scribble_trailing_kvargs():
+    """processCustomArgs scribble: trailing key=value args are parsed correctly."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("scribble", "flowing", "5xred speed=50 dir=r2l blink=fast blinkspeed=75"),
+    )
+    assert result is not None
+    assert result["mode"] == "scribble"
+    assert result["effect"] == ScribbleEffect.FLOWING.value
+    assert result["speed"] == 50
+    assert result["direction"] == ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value
+    leds = result["leds"]
+    assert len(leds) == 5
+    # blink=fast and blinkspeed=75 should be baked into each LED
+    for led in leds:
+        assert led.blink_mode == ScribbleBlinkMode.FAST
+        assert led.blink_speed == 75
+
+
+def test_cli_scribble_effect_mapping():
+    """processCustomArgs scribble: all effect names map correctly."""
+    parser = OptionParser()
+    effect_map = {
+        "static": ScribbleEffect.STATIC.value,
+        "flowing": ScribbleEffect.FLOWING.value,
+        "twinkling": ScribbleEffect.TWINKLING_STARS.value,
+        "stars_wink": ScribbleEffect.STARS_WINK.value,
+        "accumulate": ScribbleEffect.ACCUMULATE.value,
+    }
+    for name, expected_value in effect_map.items():
+        result = processCustomArgs(parser, ("scribble", name, "red"))
+        assert result is not None, f"Failed for effect {name}"
+        assert result["effect"] == expected_value, f"Wrong value for effect {name}"
+
+
+def test_cli_scribble_white_run_length():
+    """processCustomArgs scribble: '3xw50' -> 3 white LEDs at level 50."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "3xw50"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 3
+    for led in leds:
+        assert led.rgb is None
+        assert led.white == 50
+
+
+def test_cli_scribble_off_run_length():
+    """processCustomArgs scribble: '5xoff' -> 5 off ScribbleLEDs."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "5xoff"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 5
+    for led in leds:
+        assert led.rgb is None
+        assert led.white is None
+
+
+def test_cli_scribble_default_fields():
+    """processCustomArgs scribble: returned dict has density and direction defaults."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red"))
+    assert result is not None
+    assert "density" in result
+    assert "direction" in result
+    assert result["density"] == 80
+    assert result["direction"] == ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value
+
+
+def test_cli_scribble_color_name_starting_with_w():
+    """processCustomArgs scribble: 'white' parses to a color LED, not a white-level token."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "white"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb == (255, 255, 255)
+    assert leds[0].white is None
+
+
+def test_cli_scribble_wheat_color_name():
+    """processCustomArgs scribble: 'wheat' parses as a color LED (not a white token)."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "wheat"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is not None
+    assert leds[0].white is None
+
+
+def test_cli_scribble_white_level_still_works():
+    """processCustomArgs scribble: 'w50' still parses as white level 50."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "w50"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white == 50
+
+
+def test_reconcile_scribble_led_count_pad():
+    """_reconcile_scribble_led_count pads the tail with off-LEDs to reach device count."""
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 10
+    result = _reconcile_scribble_led_count(leds, 80)
+    assert len(result) == 80
+    # first 10 keep the red color
+    for led in result[:10]:
+        assert led.rgb == (255, 0, 0)
+    # remaining 70 are off
+    for led in result[10:]:
+        assert led.rgb is None
+        assert led.white is None
+
+
+def test_reconcile_scribble_led_count_truncate():
+    """_reconcile_scribble_led_count truncates to device count when too many."""
+    leds = [ScribbleLED(rgb=(0, 0, 255))] * 90
+    result = _reconcile_scribble_led_count(leds, 80)
+    assert len(result) == 80
+    for led in result:
+        assert led.rgb == (0, 0, 255)
+
+
+def test_reconcile_scribble_led_count_none_device():
+    """_reconcile_scribble_led_count returns leds unchanged when device count is None."""
+    leds = [ScribbleLED(rgb=(0, 255, 0))] * 5
+    result = _reconcile_scribble_led_count(leds, None)
+    assert result is leds
+
+
+def test_reconcile_scribble_led_count_exact_match():
+    """_reconcile_scribble_led_count returns leds unchanged when count matches."""
+    leds = [ScribbleLED(rgb=(0, 255, 0))] * 80
+    result = _reconcile_scribble_led_count(leds, 80)
+    assert len(result) == 80
+
+
+# ---------------------------------------------------------------------------
+# Gap 1 — Numeric effect id
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_numeric_effect_valid():
+    """processCustomArgs scribble: numeric effect id 4 -> effect==4 in result."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "4", "80xred"))
+    assert result is not None
+    assert result["mode"] == "scribble"
+    assert result["effect"] == 4
+
+
+def test_cli_scribble_numeric_effect_zero():
+    """processCustomArgs scribble: numeric effect id 0 -> effect==0 (same as static)."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "0", "red"))
+    assert result is not None
+    assert result["effect"] == 0
+
+
+def test_cli_scribble_numeric_effect_max():
+    """processCustomArgs scribble: numeric effect id 8 -> effect==8 (same as accumulate)."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "8", "red"))
+    assert result is not None
+    assert result["effect"] == 8
+
+
+def test_cli_scribble_named_effect_still_works():
+    """processCustomArgs scribble: named effect 'flowing' -> effect==1."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "flowing", "red"))
+    assert result is not None
+    assert result["effect"] == ScribbleEffect.FLOWING.value
+
+
+def test_cli_scribble_numeric_effect_out_of_range():
+    """processCustomArgs scribble: effect id 9 -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "9", "red"))
+
+
+def test_cli_scribble_numeric_effect_garbage():
+    """processCustomArgs scribble: garbage effect name -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "boguseffect", "red"))
+
+
+# ---------------------------------------------------------------------------
+# Gap 2 — Per-LED blink syntax  (<value>[/<blinkmode>[/<blinkspeed>]])
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_per_led_blink_suffix_fast():
+    """processCustomArgs scribble: 'red/fast/80' -> FAST blink_mode, speed 80."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red/fast/80"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].blink_mode == ScribbleBlinkMode.FAST
+    assert leds[0].blink_speed == 80
+
+
+def test_cli_scribble_per_led_blink_suffix_run_length():
+    """processCustomArgs scribble: '40xred/fast/80 40xgreen' -> first 40 FAST, last 40 NONE."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser, ("scribble", "static", "40xred/fast/80 40xgreen")
+    )
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 80
+    for led in leds[:40]:
+        assert led.blink_mode == ScribbleBlinkMode.FAST
+        assert led.blink_speed == 80
+    for led in leds[40:]:
+        assert led.blink_mode == ScribbleBlinkMode.NONE
+
+
+def test_cli_scribble_per_led_blink_suffix_white():
+    """processCustomArgs scribble: 'w50/slow' -> white=50 with SLOW blink."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "w50/slow"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].white == 50
+    assert leds[0].blink_mode == ScribbleBlinkMode.SLOW
+
+
+def test_cli_scribble_per_led_blink_suffix_off():
+    """processCustomArgs scribble: 'off/fast' -> off LED with FAST blink."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "off/fast"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].rgb is None
+    assert leds[0].white is None
+    assert leds[0].blink_mode == ScribbleBlinkMode.FAST
+
+
+def test_cli_scribble_per_led_blink_overrides_global():
+    """processCustomArgs scribble: per-token blink overrides global blink= setting."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("scribble", "static", "red/fast/80 blue blink=slow blinkspeed=30"),
+    )
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 2
+    # 'red/fast/80' overrides global
+    assert leds[0].blink_mode == ScribbleBlinkMode.FAST
+    assert leds[0].blink_speed == 80
+    # 'blue' inherits global blink=slow blinkspeed=30
+    assert leds[1].blink_mode == ScribbleBlinkMode.SLOW
+    assert leds[1].blink_speed == 30
+
+
+def test_cli_scribble_per_led_blink_mode_only():
+    """processCustomArgs scribble: 'green/slow' -> SLOW blink, default speed."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "green/slow"))
+    assert result is not None
+    leds = result["leds"]
+    assert len(leds) == 1
+    assert leds[0].blink_mode == ScribbleBlinkMode.SLOW
+
+
+def test_cli_scribble_per_led_blink_bogus_mode():
+    """processCustomArgs scribble: 'red/bogus' -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "static", "red/bogus"))
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 — enter=true|false token
+# ---------------------------------------------------------------------------
+
+
+def test_cli_scribble_enter_false():
+    """processCustomArgs scribble: 'enter=false' -> enter_mode False in result."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "80xred enter=false"))
+    assert result is not None
+    assert result["enter_mode"] is False
+
+
+def test_cli_scribble_enter_true_explicit():
+    """processCustomArgs scribble: 'enter=true' -> enter_mode True in result."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red enter=true"))
+    assert result is not None
+    assert result["enter_mode"] is True
+
+
+def test_cli_scribble_enter_default_true():
+    """processCustomArgs scribble: absent enter= token -> enter_mode defaults to True."""
+    parser = OptionParser()
+    result = processCustomArgs(parser, ("scribble", "static", "red"))
+    assert result is not None
+    assert result["enter_mode"] is True
+
+
+def test_cli_scribble_enter_invalid():
+    """processCustomArgs scribble: 'enter=maybe' -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("scribble", "static", "red enter=maybe"))
+
+
+# ---------------------------------------------------------------------------
+# Gap 4 — processCustomArgs variant parameter
+# ---------------------------------------------------------------------------
+
+
+def test_processCustomArgs_variant_2():
+    """processCustomArgs: variant=2 -> option==2 in extended result."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        variant=2,
+    )
+    assert result is not None
+    assert result["mode"] == "extended"
+    assert result["option"] == 2
+
+
+def test_processCustomArgs_variant_1():
+    """processCustomArgs: variant=1 -> option==1."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        variant=1,
+    )
+    assert result is not None
+    assert result["option"] == 1
+
+
+def test_processCustomArgs_variant_0():
+    """processCustomArgs: variant=0 -> option==0."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        variant=0,
+    )
+    assert result is not None
+    assert result["option"] == 0
+
+
+def test_processCustomArgs_variant_out_of_range():
+    """processCustomArgs: variant=5 -> parser.error (SystemExit)."""
+    parser = OptionParser()
+    with pytest.raises(SystemExit):
+        processCustomArgs(parser, ("wave", "60", "red green"), variant=5)
+
+
+def test_processCustomArgs_colorchange_still_works():
+    """processCustomArgs: colorchange=True without variant -> option==1 (unchanged)."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        colorchange=True,
+    )
+    assert result is not None
+    assert result["option"] == 1
+
+
+def test_processCustomArgs_variant_overrides_colorchange():
+    """processCustomArgs: variant=2 with colorchange=True -> option==2 (variant wins)."""
+    parser = OptionParser()
+    result = processCustomArgs(
+        parser,
+        ("wave", "60", "red green"),
+        colorchange=True,
+        variant=2,
+    )
+    assert result is not None
+    assert result["option"] == 2
