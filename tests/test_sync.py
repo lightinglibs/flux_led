@@ -1440,8 +1440,9 @@ class TestLight(unittest.TestCase):
             if calls == 2:
                 # Extended state: 21 bytes total, first 2 already read
                 self.assertEqual(expected, 19)
+                # Byte 18 (extended-state LED-count position) = 0x64 -> 100.
                 return bytearray(
-                    b"\x01\x00\xb6\x01\x23\x61\x00\x64\x0f\x00\x00\x00\x64\x64\x00\x00\x00\x00\x83"
+                    b"\x01\x00\xb6\x01\x23\x61\x00\x64\x0f\x00\x00\x00\x64\x64\x00\x00\x64\x00\x83"
                 )
 
         mock_read.side_effect = read_data
@@ -1452,6 +1453,8 @@ class TestLight(unittest.TestCase):
         self.assertEqual(light.model_num, 0xB6)
         assert "Surplife" in light.model
         assert light.supports_extended_custom_effects is True
+        # The configured LED count is exposed on the sync path too.
+        self.assertEqual(light.led_count, 100)
 
         # Basic function: on/off issue a standard power command.
         mock_send.reset_mock()

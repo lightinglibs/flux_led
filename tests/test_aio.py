@@ -4316,7 +4316,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
 
     task = asyncio.create_task(light.async_setup(_updated_callback))
     _transport, _protocol = await mock_aio_protocol()
-    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 00 00 CS
+    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 64(count) 00 CS
     light._aio_protocol.data_received(
         bytes(
             (
@@ -4338,7 +4338,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
                 0x64,
                 0x00,
                 0x00,
-                0x00,
+                0x64,
                 0x00,
                 0x83,
             )
@@ -4350,6 +4350,9 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
     assert "Surplife" in light.model
     assert light.supports_extended_custom_effects is True
+    # The configured LED count (extended-state byte 18 = 0x64) is exposed
+    # end-to-end via the device property (async path store).
+    assert light.led_count == 100
 
 
 def test_protocol_extended_custom_state_response_length():
@@ -4372,6 +4375,19 @@ def test_protocol_extended_state_validation_0xB6():
 def test_protocol_extended_state_to_state_white_off():
     """white_brightness of 0 maps to both white channels off."""
     ext = bytes.fromhex("ea810100b605236100640f000000ff000000000083")
+    result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
+    assert result[9] == 0  # warm_white
+    assert result[11] == 0  # cool_white
+
+
+def test_protocol_extended_state_to_state_white_brightness_out_of_range():
+    """white_brightness > 100 maps to both white channels off (no ValueError).
+
+    Byte 15 is a raw 0-255 value; an out-of-range white brightness must not
+    crash ``scaled_color_temp_to_white_levels`` (which rejects brightness > 100).
+    Temp (byte 14 = 0x32) is in range so only the brightness guard applies.
+    """
+    ext = bytes.fromhex("ea810100b605236100640f00000032c80000000083")
     result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
     assert result[9] == 0  # warm_white
     assert result[11] == 0  # cool_white

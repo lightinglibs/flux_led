@@ -802,6 +802,12 @@ class LEDENETDevice:
                 utils.raw_state_to_dec(rx),
             )
             return False
+        # The sync path delivers the raw extended frame here (0xB6 only ever
+        # replies with the extended state), so capture the LED count before the
+        # frame is converted to the standard layout. The async path stores it in
+        # process_extended_state_response instead.
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            self._extended_led_count = self._protocol.extended_state_led_count(rx)
         return self._process_valid_state_response(rx)
 
     def _process_valid_state_response(self, rx: bytes | bytearray) -> bool:

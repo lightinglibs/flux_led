@@ -1663,7 +1663,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         white_temp = raw_state[14]
         white_brightness = raw_state[15]
 
-        if white_temp > 100 or white_brightness == 0:
+        if white_temp > 100 or white_brightness == 0 or white_brightness > 100:
             cool_white = 0
             warm_white = 0
         else:
@@ -1704,7 +1704,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             )
         )
 
-    def extended_state_led_count(self, raw_state: bytes) -> int | None:
+    def extended_state_led_count(self, raw_state: bytes | bytearray) -> int | None:
         """Return the configured LED count from an extended state response, or None."""
         if not self.is_valid_extended_state_response(raw_state):
             return None
