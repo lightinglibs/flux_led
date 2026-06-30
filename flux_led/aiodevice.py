@@ -853,6 +853,23 @@ class AIOWifiLedBulb(LEDENETDevice):
         assert self._aio_protocol is not None
         self._aio_protocol.write(msg)
 
+    def _protocol_failure_detail(self) -> str:
+        """Summarize any raw bytes received while probing for the protocol.
+
+        When protocol determination fails it is almost always because the
+        device sent a response that no known protocol could parse (e.g. a new
+        firmware/model variant). Surfacing those raw bytes turns an otherwise
+        opaque failure into an actionable bug report.
+        """
+        parts: list[str] = []
+        for name, msg in self._last_message.items():
+            parts.append(f"{name}={' '.join(f'0x{b:02X}' for b in msg)}")
+        if self._buffer:
+            parts.append(f"unparsed={' '.join(f'0x{b:02X}' for b in self._buffer)}")
+        if not parts:
+            return "no response received from device"
+        return "; ".join(parts)
+
     async def _async_determine_protocol(self) -> None:
         # determine the type of protocol based of first 2 bytes.
         for protocol_cls in self._protocol_probes():
@@ -872,5 +889,16 @@ class AIOWifiLedBulb(LEDENETDevice):
                     continue
                 else:
                     return
+        detail = self._protocol_failure_detail()
+        _LOGGER.warning(
+            "%s: Cannot determine protocol; raw device response: %s. "
+            "Please report this at "
+            "https://github.com/Danielhiversen/flux_led/issues "
+            "to help add support for this device.",
+            self.ipaddr,
+            detail,
+        )
         self.set_unavailable("Cannot determine protocol")
-        raise DeviceUnavailableException(f"{self.ipaddr}: Cannot determine protocol")
+        raise DeviceUnavailableException(
+            f"{self.ipaddr}: Cannot determine protocol ({detail})"
+        )
