@@ -178,11 +178,11 @@ class BulbScanner:
         """Return only complete bulb discoveries."""
         return [info for info in self._discoveries.values() if info["id"]]
 
-    def getBulbInfoByID(self, id: str) -> FluxLEDDiscovery:
+    def getBulbInfoByID(self, id: str) -> FluxLEDDiscovery | None:
         for b in self.found_bulbs:
             if b["id"] == id:
                 return b
-        return b
+        return None
 
     def getBulbInfo(self) -> list[FluxLEDDiscovery]:
         return self.found_bulbs
@@ -294,9 +294,10 @@ class BulbScanner:
         destination: tuple[str, int],
     ) -> None:
         """Send messages with a short delay between them."""
+        last_idx = len(messages) - 1
         for idx, message in enumerate(messages):
             self._send_message(sender, destination, message)
-            if idx != len(messages):
+            if idx != last_idx:
                 time.sleep(MESSAGE_SEND_INTERLEAVE_DELAY)
 
     def get_discovery_messages(
