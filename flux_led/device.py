@@ -281,7 +281,7 @@ class WifiLedBulb(LEDENETDevice):
                 self.close()
                 continue
             # Extended-state-only devices (e.g. 0xB6) reply with 0xEA 0x81 and
-            # need 21 bytes total instead of the standard state length.
+            # need 27 bytes total instead of the standard state length.
             if rx[0] == 0xEA and rx[1] == 0x81:
                 additional_bytes = LEDENET_EXTENDED_STATE_RESPONSE_LEN - read_bytes
             else:

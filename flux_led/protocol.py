@@ -110,7 +110,7 @@ LEDNET_MUSIC_MODE_RESPONSE_LEN = 13  # 72 01 26 01 00 00 00 00 00 00 64 64 62
 LEDENET_POWER_RESTORE_RESPONSE_LEN = 7
 LEDENET_ORIGINAL_STATE_RESPONSE_LEN = 11
 LEDENET_STATE_RESPONSE_LEN = 14
-LEDENET_EXTENDED_STATE_RESPONSE_LEN = 21
+LEDENET_EXTENDED_STATE_RESPONSE_LEN = 27
 LEDENET_POWER_RESPONSE_LEN = 4
 LEDENET_ADDRESSABLE_STATE_RESPONSE_LEN = 25
 LEDENET_A1_DEVICE_CONFIG_RESPONSE_LEN = 12
@@ -1620,7 +1620,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
 
     @property
     def state_response_length(self) -> int:
-        """The length of the query response (extended state, 21 bytes)."""
+        """The length of the query response (extended state, 27 bytes)."""
         return LEDENET_EXTENDED_STATE_RESPONSE_LEN
 
     def is_valid_state_response(self, raw_state: bytes | bytearray) -> bool:

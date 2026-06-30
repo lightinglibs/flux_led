@@ -1438,11 +1438,11 @@ class TestLight(unittest.TestCase):
                 # 0xB6 device returns extended state format (0xEA 0x81)
                 return bytearray(b"\xea\x81")
             if calls == 2:
-                # Extended state: 21 bytes total, first 2 already read
-                self.assertEqual(expected, 19)
+                # Extended state: 27 bytes total, first 2 already read
+                self.assertEqual(expected, 25)
                 # Byte 18 (extended-state LED-count position) = 0x64 -> 100.
                 return bytearray(
-                    b"\x01\x00\xb6\x01\x23\x61\x00\x64\x0f\x00\x00\x00\x64\x64\x00\x00\x64\x00\x83"
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
                 )
 
         mock_read.side_effect = read_data

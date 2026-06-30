@@ -4316,7 +4316,8 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
 
     task = asyncio.create_task(light.async_setup(_updated_callback))
     _transport, _protocol = await mock_aio_protocol()
-    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 64(count) 00 CS
+    # Real captured 27-byte extended state frame; byte 18 = 0x64 (LED count 100):
+    # EA 81 01 00 B6(model) 09 24 66 01 64 F0 00 00 00 00 64 05 00 64(count) 00 00 00 20 02 01 00 03
     light._aio_protocol.data_received(
         bytes(
             (
@@ -4325,22 +4326,28 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
                 0x01,
                 0x00,
                 0xB6,
+                0x09,
+                0x24,
+                0x66,
                 0x01,
-                0x23,
-                0x61,
-                0x00,
                 0x64,
-                0x0F,
+                0xF0,
+                0x00,
                 0x00,
                 0x00,
                 0x00,
                 0x64,
+                0x05,
+                0x00,
                 0x64,
                 0x00,
                 0x00,
-                0x64,
                 0x00,
-                0x83,
+                0x20,
+                0x02,
+                0x01,
+                0x00,
+                0x03,
             )
         )
     )
