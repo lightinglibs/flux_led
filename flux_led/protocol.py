@@ -2332,7 +2332,7 @@ class ProtocolLEDENETAddressableA3(ProtocolLEDENETAddressableA2):
                 pixels_per_segment,
                 segments,
                 music_pixels_per_segment,
-                segments,
+                music_segments,
             ),
             inner_pre_constructed=True,
         )
