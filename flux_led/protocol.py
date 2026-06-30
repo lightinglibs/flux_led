@@ -1021,6 +1021,14 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """Check if a message is the start of a state response."""
         return _message_type_from_start_of_msg(data) == MSG_POWER_STATE
 
+    def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
+        """Check if this is an extended state response (0xEA 0x81 format).
+
+        The 0xB6 device replies only with this format, so probing must
+        recognise it to determine the protocol.
+        """
+        return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
+
     def is_valid_state_response(self, raw_state: bytes) -> bool:
         """Check if a state response is valid."""
         if len(raw_state) != self.state_response_length:
