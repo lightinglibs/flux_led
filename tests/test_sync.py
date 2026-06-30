@@ -1978,6 +1978,28 @@ class TestLight(unittest.TestCase):
         assert utils.color_object_to_tuple(set()) is None
         assert utils.color_object_to_tuple("#ff00ff") == (255, 0, 255)
         assert utils.color_object_to_tuple("(255,0,255)") == (255, 0, 255)
+        # rgbw / rgbww tuples pass through
+        assert utils.color_object_to_tuple((0, 255, 0, 128)) == (0, 255, 0, 128)
+        assert utils.color_object_to_tuple((0, 255, 0, 128, 64)) == (0, 255, 0, 128, 64)
+
+    def test_color_object_to_tuple_rejects_invalid_channels(self):
+        # out-of-range channels are rejected rather than silently passed through
+        # to protocol packing (the CLI treats None as "Invalid color value")
+        assert utils.color_object_to_tuple("(300, -5, 999)") is None
+        assert utils.color_object_to_tuple((300, -5, 999)) is None
+        assert utils.color_object_to_tuple((-1, 0, 0)) is None
+        assert utils.color_object_to_tuple((256, 0, 0)) is None
+        # non-integer channels are rejected
+        assert utils.color_object_to_tuple("(1.5, 0, 0)") is None
+        assert utils.color_object_to_tuple((1.5, 0, 0)) is None
+        # bool is an int subclass but is not a valid channel value
+        assert utils.color_object_to_tuple((True, 0, 0)) is None
+        # wrong-length tuples remain invalid
+        assert utils.color_object_to_tuple((1, 2)) is None
+        assert utils.color_object_to_tuple((1, 2, 3, 4, 5, 6)) is None
+        # boundary values are accepted
+        assert utils.color_object_to_tuple((0, 0, 0)) == (0, 0, 0)
+        assert utils.color_object_to_tuple((255, 255, 255)) == (255, 255, 255)
 
     def test_get_color_names_list(self):
         names = utils.get_color_names_list()
