@@ -36,7 +36,9 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_SOCKET,
+    ProtocolLEDENET8Byte,
 )
+from flux_led.timer import LedTimer
 from flux_led.utils import (
     color_temp_to_white_levels,
     rgbcw_brightness,
@@ -2576,3 +2578,24 @@ class TestLight(unittest.TestCase):
 
         with pytest.raises(ValueError):
             light.setPresetPattern(305, 50, 100)
+
+
+def test_construct_set_timers_drops_all_removable_timers():
+    """Inactive/expired timers must all be dropped, even when adjacent.
+
+    Regression: construct_set_timers used list.remove() while iterating,
+    which skips the element after each removal, leaving some removable
+    timers in the outgoing message.
+    """
+    proto = ProtocolLEDENET8Byte()
+    # Two adjacent active-but-expired timers (date 2000-01-01, no repeat).
+    expired_bytes = b"\xf0\x00\x01\x01\x00\x00\x00\x00\x61\x00\x00\x00\x00\xf0"
+    one = LedTimer(expired_bytes)
+    assert one.isActive() and one.isExpired()
+
+    with_expired = proto.construct_set_timers(
+        [LedTimer(expired_bytes), LedTimer(expired_bytes)]
+    )
+    empty = proto.construct_set_timers([])
+    # Both should serialize to six inactive padding slots.
+    assert with_expired == empty

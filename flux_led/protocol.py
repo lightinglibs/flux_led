@@ -639,8 +639,10 @@ class ProtocolBase:
         # remove inactive or expired timers from list
         for t in timer_list:
             t.length = self.timer_len
-            if not t.isActive() or t.isExpired():
-                timer_list.remove(t)
+        # Filter in place rather than calling list.remove() during iteration,
+        # which skips the element after each removal and leaves some
+        # inactive/expired timers in the list.
+        timer_list[:] = [t for t in timer_list if t.isActive() and not t.isExpired()]
 
         # truncate if more than 6
         if len(timer_list) > self.timer_count:
