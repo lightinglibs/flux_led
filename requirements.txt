@@ -1,1 +1,1 @@
-webcolors>=24.11.1
+webcolors>=25.10.0
