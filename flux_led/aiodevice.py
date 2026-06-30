@@ -602,6 +602,18 @@ class AIOWifiLedBulb(LEDENETDevice):
             )
             if isinstance(self._protocol, ALL_IC_PROTOCOLS):
                 await self._async_device_config_resync()
+            elif (
+                operating_mode is not None
+                and device_config.operating_modes
+                and operating_mode_num is not None
+            ):
+                # Non-IC devices (e.g. 0x25 Controller RGB/WW/CW) have no
+                # strip-config response to resync from, and the device may
+                # not echo the new operating mode back in its next state
+                # response. Cache the requested value optimistically so
+                # callers see what they asked for until a fresh state
+                # message arrives.
+                self._pending_operating_mode_num = operating_mode_num
 
     async def async_unpair_remotes(self) -> None:
         """Unpair 2.4ghz remotes."""

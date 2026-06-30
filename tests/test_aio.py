@@ -330,6 +330,90 @@ async def test_reassemble(mock_aio_protocol):
 
 
 @pytest.mark.asyncio
+async def test_pending_operating_mode_after_set_device_config(mock_aio_protocol):
+    """Optimistic operating_mode after async_set_device_config on 0x25."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+    # raw_state.mode = 0x05 -> RGBWW per MULTI_MODE_NUM_TO_MODE
+    light._aio_protocol.data_received(
+        b"\x81\x25\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xde"
+    )
+    await task
+    assert light.model_num == 0x25
+    assert light.operating_mode == COLOR_MODE_RGBWW
+    assert light.operating_mode_num == 5
+
+    # Switch to RGB. Device may not echo the change in its next state
+    # response, so cache the requested value locally until then.
+    await light.async_set_device_config(operating_mode=COLOR_MODE_RGB)
+    assert light.operating_mode == COLOR_MODE_RGB
+    assert light.operating_mode_num == 3
+
+    # A fresh state response from the device is authoritative.
+    light._aio_protocol.data_received(
+        b"\x81\x25\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xde"
+    )
+    await asyncio.sleep(0)
+    assert light.operating_mode == COLOR_MODE_RGBWW
+    assert light.operating_mode_num == 5
+
+
+@pytest.mark.asyncio
+async def test_pending_operating_mode_handles_stuck_dim(mock_aio_protocol):
+    """Issue #390: 0x25 sometimes reports mode=0x21 (low nibble = DIM)."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+    # Reproduces the raw state reported by the issue author: mode=0x21.
+    light._aio_protocol.data_received(
+        b"\x81\x25\x24\x61\x21\x13\x26\x26\x26\x00\x01\x00\x00\xd2"
+    )
+    await task
+    assert light.model_num == 0x25
+    # Low nibble of 0x21 is 1 -> DIM.
+    assert light.operating_mode == "DIM"
+
+    # Caller asks the controller to switch to RGBWW; until the device
+    # echoes back, the property surfaces the requested value rather than
+    # the stale DIM reading.
+    await light.async_set_device_config(operating_mode=COLOR_MODE_RGBWW)
+    assert light.operating_mode == COLOR_MODE_RGBWW
+    assert light.operating_mode_num == 5
+
+
+@pytest.mark.asyncio
+async def test_pending_operating_mode_not_set_when_omitted(mock_aio_protocol):
+    """Calling async_set_device_config without operating_mode is a no-op."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        b"\x81\x25\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xde"
+    )
+    await task
+    assert light.operating_mode == COLOR_MODE_RGBWW
+
+    # Re-applying the existing operating mode should leave the pending
+    # cache empty because no caller-requested value was supplied.
+    await light.async_set_device_config()
+    assert light._pending_operating_mode_num is None
+    assert light.operating_mode == COLOR_MODE_RGBWW
+
+
+@pytest.mark.asyncio
 async def test_extract_from_outer_message(mock_aio_protocol):
     """Test we can can extract a message wrapped with an outer message."""
     light = AIOWifiLedBulb("192.168.1.166")
