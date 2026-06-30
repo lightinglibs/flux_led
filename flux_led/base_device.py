@@ -49,6 +49,10 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_RED,
     STATE_WARM_WHITE,
     STATIC_MODES,
+    ExtendedCustomEffectPattern,
+    ScribbleBlinkMode,
+    ScribbleEffect,
+    ScribbleLED,
     WhiteChannelType,
 )
 from .models_db import (
@@ -72,6 +76,7 @@ from .pattern import (
     EFFECT_LIST,
     EFFECT_LIST_DIMMABLE,
     EFFECT_LIST_LEGACY_CCT,
+    EXTENDED_CUSTOM_EFFECT_ID_NAME,
     ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME,
     ORIGINAL_ADDRESSABLE_EFFECT_NAME_ID,
     PresetPattern,
@@ -90,6 +95,7 @@ from .protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_CCT,
     PROTOCOL_LEDENET_CCT_WRAPPED,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_ORIGINAL_RGBW,
@@ -110,6 +116,7 @@ from .protocol import (
     ProtocolLEDENETAddressableChristmas,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETOriginal,
     ProtocolLEDENETOriginalCCT,
     ProtocolLEDENETOriginalRGBW,
@@ -143,6 +150,7 @@ PROTOCOL_TYPES = (
     | ProtocolLEDENET9ByteAutoOn
     | ProtocolLEDENET9ByteDimmableEffects
     | ProtocolLEDENET25Byte
+    | ProtocolLEDENETExtendedCustom
     | ProtocolLEDENETAddressableA1
     | ProtocolLEDENETAddressableA2
     | ProtocolLEDENETAddressableA3
@@ -187,6 +195,7 @@ PROTOCOL_NAME_TO_CLS = {
     PROTOCOL_LEDENET_9BYTE_AUTO_ON: ProtocolLEDENET9ByteAutoOn,
     PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS: ProtocolLEDENET9ByteDimmableEffects,
     PROTOCOL_LEDENET_25BYTE: ProtocolLEDENET25Byte,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM: ProtocolLEDENETExtendedCustom,
     PROTOCOL_LEDENET_ADDRESSABLE_A3: ProtocolLEDENETAddressableA3,
     PROTOCOL_LEDENET_ADDRESSABLE_A2: ProtocolLEDENETAddressableA2,
     PROTOCOL_LEDENET_ADDRESSABLE_A1: ProtocolLEDENETAddressableA1,
@@ -246,6 +255,7 @@ class LEDENETDevice:
         self._device_config: LEDENETAddressableDeviceConfiguration | None = None
         self._last_message: dict[str, bytes] = {}
         self._unavailable_reason: str | None = None
+        self._extended_led_count: int | None = None
 
     def _protocol_probes(
         self,
@@ -486,6 +496,11 @@ class LEDENETDevice:
         return self._device_config.music_segments
 
     @property
+    def led_count(self) -> int | None:
+        """Return the device's configured LED count (0xB6), or None if unknown."""
+        return self._extended_led_count
+
+    @property
     def wiring(self) -> str | None:
         """Return the sort order as a string."""
         device_config = self.model_data.device_config
@@ -639,6 +654,23 @@ class LEDENETDevice:
         return [*effects, EFFECT_RANDOM]
 
     @property
+    def supports_extended_custom_effects(self) -> bool:
+        """Return True if the device uses the extended custom protocol."""
+        return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    @property
+    def supports_scribble(self) -> bool:
+        """Return True if the device supports the per-LED scribble feature."""
+        return self.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    @property
+    def extended_custom_effect_pattern_list(self) -> list[str] | None:
+        """Return available extended custom effect patterns, or None if not supported."""
+        if not self.supports_extended_custom_effects:
+            return None
+        return [p.name.lower().replace("_", " ") for p in ExtendedCustomEffectPattern]
+
+    @property
     def effect(self) -> str | None:
         """Return the current effect."""
         if self.protocol in CHRISTMAS_EFFECTS_PROTOCOLS:
@@ -652,6 +684,16 @@ class LEDENETDevice:
         mode = self.raw_state.mode
         pattern_code = self.preset_pattern_num
         protocol = self.protocol
+        # Devices with extended custom effects use different pattern names
+        if self.supports_extended_custom_effects and pattern_code == 0x25:
+            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
+        # For 0xB6 segment mode: preset_pattern=0x24 and mode=0x00
+        if (
+            self.supports_extended_custom_effects
+            and pattern_code == 0x24
+            and mode == 0x00
+        ):
+            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)  # Returns "Segments"
         if protocol in OLD_EFFECTS_PROTOCOLS:
             effect_id = (pattern_code << 8) + mode - 99
             return ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.get(effect_id)
@@ -859,6 +901,8 @@ class LEDENETDevice:
     def process_extended_state_response(self, msg: bytes) -> bool:
         """Process and extended state response."""
         assert self._protocol is not None
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            self._extended_led_count = self._protocol.extended_state_led_count(msg)
         self._process_valid_state_response(self._protocol.extended_state_to_state(msg))
         return True
 
@@ -1301,6 +1345,218 @@ class LEDENETDevice:
 
         assert self._protocol is not None
         return self._protocol.construct_custom_effect(rgb_list, speed, transition_type)
+
+    def _generate_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Generate the extended custom effect protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        # Validate pattern_id
+        valid_ids = set(range(1, 25)) | {101, 102}
+        if pattern_id not in valid_ids:
+            raise ValueError(f"Pattern ID must be 1-24 or 101-102, got {pattern_id}")
+
+        # Truncate if more than 8 colors
+        if len(colors) > 8:
+            _LOGGER.warning(
+                "Too many colors in %s, truncating list to %s", len(colors), 8
+            )
+            colors = colors[:8]
+
+        # Require at least one color
+        if len(colors) == 0:
+            raise ValueError("Surplife pattern requires at least one color")
+
+        # Validate color tuples
+        for idx, color in enumerate(colors):
+            if len(color) != 3:
+                raise ValueError(f"Color {idx} must be (R, G, B) tuple")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_extended_custom_effect(
+            pattern_id, colors, speed, density, direction, option
+        )
+
+    def _generate_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Generate custom segment colors protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        # Truncate if more than 20 segments
+        if len(segments) > 20:
+            _LOGGER.warning("Too many segments (%s), truncating to 20", len(segments))
+            segments = segments[:20]
+
+        # Validate color tuples
+        for idx, color in enumerate(segments):
+            if color is None:
+                continue
+            if len(color) != 3:
+                raise ValueError(f"Segment {idx} must be (R, G, B) tuple or None")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_custom_segment_colors(segments)
+
+    def _generate_scribble_init(self, num_leds: int) -> bytearray:
+        """Generate the scribble-mode init (E1 23, non-rendering) bytes.
+
+        E1 23 does not render -- it only guarantees scribble-mode entry. Colors
+        render through grouped E1 26 paints (see _scribble_paint_groups).
+        """
+        # The E1 23 byte-8 count and the E1 26 bitmap sizing are one-byte /
+        # ceil(N/8) fields; N is unrepresentable above 255 on the wire.
+        if not 0 < num_leds <= 255:
+            raise ValueError(f"num_leds must be 1..255, got {num_leds}")
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_scribble_init(num_leds)
+
+    def _generate_scribble_paint(
+        self,
+        effect: int,
+        direction: int,
+        density: int,
+        speed: int,
+        color: tuple[int, int, int] | None,
+        white: int | None,
+        blink_mode: int,
+        blink_speed: int,
+        led_indices: list[int] | None,
+        num_leds: int,
+    ) -> bytearray:
+        """Generate a single scribble paint (E1 26) for one color/blink group.
+
+        Color and white are mutually exclusive. Colors are converted to
+        (H/2, S, V) via the existing _rgb_to_hsv_bytes helper.
+        """
+        if color is not None and white is not None:
+            raise ValueError("color and white are mutually exclusive")
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        if color is not None:
+            h2, s, v = self._protocol._rgb_to_hsv_bytes(*color)[:3]
+            white_level = 0
+        else:
+            h2 = s = v = 0
+            white_level = white or 0
+        if led_indices is not None:
+            for i in led_indices:
+                if not 0 <= i < num_leds:
+                    raise ValueError(f"LED index {i} out of range for {num_leds} LEDs")
+        return self._protocol.construct_scribble_paint(
+            effect=effect,
+            direction=direction,
+            density=density,
+            speed=speed,
+            blink_mode=blink_mode,
+            h2=h2,
+            s=s,
+            v=v,
+            white=white_level,
+            blink_speed=blink_speed,
+            bitmap_leds=led_indices,
+            num_leds=num_leds,
+        )
+
+    def _scribble_paint_groups(
+        self,
+        leds: list[ScribbleLED],
+        effect: ScribbleEffect | int,
+        direction: int,
+        density: int,
+        speed: int,
+        num_leds: int,
+    ) -> list[bytearray]:
+        """Group per-LED settings and return one E1 26 paint per group.
+
+        This is the primary render path for every scribble call (E1 23 does
+        not render). LEDs are grouped by (rgb, white, blink_mode, blink_speed)
+        in first-appearance order; an off LED (rgb None, white None) is painted
+        as color (0,0,0). The union of all group bitmaps covers exactly the N
+        LEDs, so the result is deterministic regardless of prior device state.
+        """
+        if not leds:
+            raise ValueError("leds must not be empty")
+        if not 0 < num_leds <= 255:
+            raise ValueError(f"num_leds must be 1..255, got {num_leds}")
+        if self.led_count is not None and self.led_count != len(leds):
+            raise ValueError(f"Got {len(leds)} LEDs but device has {self.led_count}")
+        if num_leds != len(leds):
+            raise ValueError(f"num_leds {num_leds} does not match {len(leds)} LEDs")
+
+        # effect may be a ScribbleEffect (the 5 named ones) or a raw int id.
+        # The device accepts effect ids 0x00-0x08 (verified on-device); ids 3,4,
+        # 6,7 are valid effects with no UI name, reachable only as raw ints.
+        effect_id = effect.value if isinstance(effect, ScribbleEffect) else int(effect)
+        if not 0x00 <= effect_id <= 0x08:
+            raise ValueError(f"scribble effect id must be 0x00-0x08, got {effect_id}")
+
+        # Validate per-LED settings and bucket indices by group key.
+        groups: dict[
+            tuple[tuple[int, int, int] | None, int | None, ScribbleBlinkMode, int],
+            list[int],
+        ] = {}
+        for idx, led in enumerate(leds):
+            if led.rgb is not None and led.white is not None:
+                raise ValueError(f"LED {idx}: rgb and white are mutually exclusive")
+            if led.rgb is not None:
+                if len(led.rgb) != 3 or any(not 0 <= c <= 255 for c in led.rgb):
+                    raise ValueError(f"LED {idx}: rgb values must be 0-255")
+            if led.white is not None and not 0 <= led.white <= 100:
+                raise ValueError(f"LED {idx}: white must be 0-100")
+            if not 0 <= led.blink_speed <= 100:
+                raise ValueError(f"LED {idx}: blink_speed must be 0-100")
+            key = (led.rgb, led.white, led.blink_mode, led.blink_speed)
+            groups.setdefault(key, []).append(idx)
+
+        messages: list[bytearray] = []
+        for (rgb, white, blink_mode, blink_speed), indices in groups.items():
+            # Off LEDs (rgb None and white None) paint as color (0,0,0).
+            color: tuple[int, int, int] | None
+            paint_white: int | None
+            if rgb is None and white is None:
+                color = (0, 0, 0)
+                paint_white = None
+            else:
+                color = rgb
+                paint_white = white
+            messages.append(
+                self._generate_scribble_paint(
+                    effect=effect_id,
+                    direction=direction,
+                    density=density,
+                    speed=speed,
+                    color=color,
+                    white=paint_white,
+                    blink_mode=blink_mode.value,
+                    blink_speed=blink_speed,
+                    led_indices=indices,
+                    num_leds=num_leds,
+                )
+            )
+        return messages
 
     def _effect_to_pattern(self, effect: str) -> int:
         """Convert an effect to a pattern code."""

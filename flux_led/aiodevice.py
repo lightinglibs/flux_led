@@ -34,7 +34,10 @@ from .const import (
     STATE_GREEN,
     STATE_RED,
     STATE_WARM_WHITE,
+    ExtendedCustomEffectDirection,
     MultiColorEffects,
+    ScribbleEffect,
+    ScribbleLED,
 )
 from .protocol import (
     POWER_RESTORE_BYTES_TO_POWER_RESTORE,
@@ -46,11 +49,12 @@ from .protocol import (
     ProtocolLEDENET8Byte,
     ProtocolLEDENETAddressableA3,
     ProtocolLEDENETAddressableChristmas,
+    ProtocolLEDENETExtendedCustom,
     ProtocolLEDENETOriginal,
     RemoteConfig,
 )
 from .scanner import FluxLEDDiscovery
-from .timer import LedTimer
+from .timer import LedTimer, LedTimerExtended
 from .utils import color_temp_to_white_levels, rgbw_brightness, rgbww_brightness
 
 _LOGGER = logging.getLogger(__name__)
@@ -84,7 +88,7 @@ class AIOWifiLedBulb(LEDENETDevice):
         self._get_time_future: asyncio.Future[bool] | None = None
         self._get_timers_lock: asyncio.Lock = asyncio.Lock()
         self._get_timers_future: asyncio.Future[bool] | None = None
-        self._timers: list[LedTimer] | None = None
+        self._timers: list[LedTimer] | list[LedTimerExtended] | None = None
         self._power_restore_future: asyncio.Future[bool] = loop.create_future()
         self._device_config_lock: asyncio.Lock = asyncio.Lock()
         self._device_config_future: asyncio.Future[bool] = loop.create_future()
@@ -422,6 +426,79 @@ class AIOWifiLedBulb(LEDENETDevice):
             self._generate_custom_patterm(rgb_list, speed, transition_type)
         )
 
+    async def async_set_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> None:
+        """Set an extended custom effect on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            pattern_id: Pattern ID (1-24 or 101-102). See ExtendedCustomEffectPattern.
+            colors: List of 1-8 RGB color tuples
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: Animation direction (0x01=L->R, 0x02=R->L)
+            option: Pattern-specific option (default 0)
+        """
+        await self._async_send_msg(
+            self._generate_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            )
+        )
+
+    async def async_set_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> None:
+        """Set custom colors for each segment on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        Sets static HSV colors for each of 20 segments on the light strip.
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        await self._async_send_msg(self._generate_custom_segment_colors(segments))
+
+    async def async_set_scribble(
+        self,
+        leds: list[ScribbleLED],
+        effect: ScribbleEffect | int = ScribbleEffect.STATIC,
+        direction: ExtendedCustomEffectDirection = (
+            ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+        ),
+        density: int = 80,
+        speed: int = 100,
+        enter_mode: bool = True,
+    ) -> None:
+        """Set a per-LED ('scribble') configuration on a 0xB6 device.
+
+        Renders every LED via grouped E1 26 paints (one per color/blink group),
+        covering all N LEDs including an (0,0,0) group for off bulbs. Per-LED
+        blink/color come from each ScribbleLED. ``effect`` is a ScribbleEffect or
+        a raw int id 0x00-0x08 (ids 3,4,6,7 are valid effects with no UI name).
+        When enter_mode is True, first sends one all-zero E1 23 to guarantee
+        scribble-mode entry from another mode (E1 26 alone also works when
+        already in scribble). E1 23 does NOT render -- all colors render through
+        E1 26 (verified on hardware).
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        num_leds = self.led_count or len(leds)
+        if enter_mode:
+            await self._async_send_msg(self._generate_scribble_init(num_leds))
+        for msg in self._scribble_paint_groups(
+            leds, effect, direction.value, density, speed, num_leds
+        ):
+            await self._async_send_msg(msg)
+
     async def async_set_effect(
         self, effect: str, speed: int, brightness: int = 100
     ) -> None:
@@ -635,7 +712,7 @@ class AIOWifiLedBulb(LEDENETDevice):
                 return None
             return self._last_time
 
-    async def async_get_timers(self) -> list[LedTimer] | None:
+    async def async_get_timers(self) -> list[LedTimer] | list[LedTimerExtended] | None:
         """Get the timers."""
         assert self._protocol is not None
         if isinstance(self._protocol, ProtocolLEDENETOriginal):
@@ -652,10 +729,24 @@ class AIOWifiLedBulb(LEDENETDevice):
                 return None
             return self._timers
 
-    async def async_set_timers(self, timer_list: list[LedTimer]) -> None:
+    async def async_set_timers(
+        self, timer_list: list[LedTimer] | list[LedTimerExtended]
+    ) -> None:
         """Set the timers."""
         assert self._protocol is not None
-        await self._async_send_msg(self._protocol.construct_set_timers(timer_list))
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            # 0xB6 devices set timers one at a time
+            commands = self._protocol.construct_set_timers(timer_list)  # type: ignore[arg-type]
+            for cmd in commands:
+                await self._async_send_msg(cmd)
+        else:
+            await self._async_send_msg(self._protocol.construct_set_timers(timer_list))  # type: ignore[arg-type]
+
+    async def async_set_timer(self, timer: LedTimerExtended) -> None:
+        """Set a single timer (for 0xB6 devices)."""
+        assert self._protocol is not None
+        if isinstance(self._protocol, ProtocolLEDENETExtendedCustom):
+            await self._async_send_msg(self._protocol.construct_set_timer(timer))
 
     async def async_set_time(self, time: datetime | None = None) -> None:
         """Set the current time."""
