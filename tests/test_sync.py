@@ -627,6 +627,11 @@ class TestLight(unittest.TestCase):
                 )
             ),
         )
+        # A list of >16 colors must be truncated for the frame WITHOUT mutating
+        # the caller's list, so it can be reused for subsequent calls.
+        too_many = [[i, 0, 0] for i in range(20)]
+        light.setCustomPattern(too_many, 50, TRANSITION_GRADUAL)
+        self.assertEqual(len(too_many), 20)
         light.close()
 
     @patch("flux_led.WifiLedBulb._send_msg")

@@ -1288,7 +1288,7 @@ class LEDENETDevice:
             _LOGGER.warning(
                 "Too many colors in %s, truncating list to %s", len(rgb_list), 16
             )
-            del rgb_list[16:]
+            rgb_list = rgb_list[:16]
         # quit if too few
         if len(rgb_list) == 0:
             raise ValueError("setCustomPattern requires at least one color tuples")
