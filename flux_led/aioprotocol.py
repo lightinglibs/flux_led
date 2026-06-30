@@ -32,7 +32,7 @@ class AIOLEDENETProtocol(asyncio.Protocol):
         self.transport = cast("WriteTransport", transport)
         self.peername = transport.get_extra_info("peername")
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes | bytearray) -> None:
         """Write data to the client."""
         assert self.transport is not None
         if _LOGGER.isEnabledFor(logging.DEBUG):

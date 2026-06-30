@@ -503,7 +503,7 @@ class ProtocolBase:
         """The bytes to send for a query request."""
 
     @abstractmethod
-    def is_valid_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if a state response is valid."""
 
     def is_valid_extended_state_response(self, raw_state: bytes) -> bool:
@@ -513,7 +513,7 @@ class ProtocolBase:
     def extended_state_to_state(self, raw_state: bytes) -> bytes:
         """Convert an extended state response to a state response."""
 
-    def is_checksum_correct(self, msg: bytes) -> bool:
+    def is_checksum_correct(self, msg: bytes | bytearray) -> bool:
         """Check a checksum of a message."""
         expected_sum = sum(msg[0:-1]) & 0xFF
         if expected_sum != msg[-1]:
@@ -780,7 +780,7 @@ class ProtocolBase:
 
     @abstractmethod
     def named_raw_state(
-        self, raw_state: bytes
+        self, raw_state: bytes | bytearray
     ) -> LEDENETOriginalRawState | LEDENETRawState:
         """Convert raw_state to a namedtuple."""
 
@@ -868,7 +868,7 @@ class ProtocolLEDENETOriginal(ProtocolBase):
         """Check if a power state response is valid."""
         return len(msg) == self.power_state_response_length and msg[0] == 0x78
 
-    def is_valid_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if a state response is valid."""
         return len(raw_state) == self.state_response_length and raw_state[0] == 0x66
 
@@ -919,7 +919,7 @@ class ProtocolLEDENETOriginal(ProtocolBase):
         """Original protocol uses no checksum."""
         return raw_bytes
 
-    def named_raw_state(self, raw_state: bytes) -> LEDENETOriginalRawState:
+    def named_raw_state(self, raw_state: bytes | bytearray) -> LEDENETOriginalRawState:
         """Convert raw_state to a namedtuple."""
         raw_bytearray = bytearray([*raw_state, 0])
         return LEDENETOriginalRawState(*raw_bytearray)
@@ -1029,7 +1029,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """
         return len(raw_state) >= 20 and raw_state[0] == 0xEA and raw_state[1] == 0x81
 
-    def is_valid_state_response(self, raw_state: bytes) -> bool:
+    def is_valid_state_response(self, raw_state: bytes | bytearray) -> bool:
         """Check if a state response is valid."""
         if len(raw_state) != self.state_response_length:
             return False
@@ -1120,7 +1120,7 @@ class ProtocolLEDENET8Byte(ProtocolBase):
         """The bytes to send for a query request."""
         return self.construct_message(bytearray([0x81, 0x8A, 0x8B]))
 
-    def named_raw_state(self, raw_state: bytes) -> LEDENETRawState:
+    def named_raw_state(self, raw_state: bytes | bytearray) -> LEDENETRawState:
         """Convert raw_state to a namedtuple."""
         return LEDENETRawState(*raw_state)
 
