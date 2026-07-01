@@ -686,6 +686,8 @@ class LEDENETDevice:
         protocol = self.protocol
         # Devices with extended custom effects use different pattern names
         if self.supports_extended_custom_effects and pattern_code == 0x25:
+            if mode not in EXTENDED_CUSTOM_EFFECT_ID_NAME:
+                _LOGGER.debug("Unmapped extended custom effect mode: %s", mode)
             return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
         # For 0xB6 segment mode: preset_pattern=0x24 and mode=0x00
         if (
@@ -1386,6 +1388,18 @@ class LEDENETDevice:
                 if not 0 <= c <= 255:
                     raise ValueError(f"Color values must be 0-255, got {c}")
 
+        # General wire-byte bounds only. Per-effect applicability (which effects
+        # accept options/density/direction, and their valid option sets) is
+        # documented in the PR description and deliberately NOT enforced here yet.
+        if not 0 <= speed <= 100:
+            raise ValueError(f"speed must be 0-100, got {speed}")
+        if not 0 <= density <= 100:
+            raise ValueError(f"density must be 0-100, got {density}")
+        if direction not in (0x01, 0x02):
+            raise ValueError(f"direction must be 0x01 or 0x02, got {direction}")
+        if not 0 <= option <= 0x02:
+            raise ValueError(f"option must be 0-2, got {option}")
+
         assert self._protocol is not None
         assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
         return self._protocol.construct_extended_custom_effect(
@@ -1514,6 +1528,12 @@ class LEDENETDevice:
         effect_id = effect.value if isinstance(effect, ScribbleEffect) else int(effect)
         if not 0x00 <= effect_id <= 0x08:
             raise ValueError(f"scribble effect id must be 0x00-0x08, got {effect_id}")
+        if direction not in (0x01, 0x02):
+            raise ValueError(f"direction must be 0x01 or 0x02, got {direction}")
+        if not 0 <= density <= 100:
+            raise ValueError(f"density must be 0-100, got {density}")
+        if not 0 <= speed <= 100:
+            raise ValueError(f"speed must be 0-100, got {speed}")
 
         # Validate per-LED settings and bucket indices by group key.
         groups: dict[

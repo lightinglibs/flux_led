@@ -4821,6 +4821,38 @@ async def test_generate_extended_custom_effect_rejects_too_many_colors(
     assert isinstance(result, bytearray)
 
 
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"speed": 101}, "speed must be 0-100"),
+        ({"speed": -1}, "speed must be 0-100"),
+        ({"density": 101}, "density must be 0-100"),
+        ({"density": -1}, "density must be 0-100"),
+        ({"direction": 0x00}, "direction must be 0x01 or 0x02"),
+        ({"direction": 0x03}, "direction must be 0x01 or 0x02"),
+        ({"option": 3}, "option must be 0-2"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_param_bounds(
+    mock_aio_protocol, kwargs, match
+):
+    """General wire-byte bounds for speed/density/direction/option are enforced."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_extended_custom_effect(1, [(255, 0, 0)], **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_param_bounds_valid(mock_aio_protocol):
+    """Boundary-valid animation params still succeed."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    result = light._generate_extended_custom_effect(
+        1, [(255, 0, 0)], speed=100, density=0, direction=0x02, option=2
+    )
+    assert isinstance(result, bytearray)
+
+
 # Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
 
 
@@ -5690,6 +5722,29 @@ async def test_scribble_paint_groups_effect_id_out_of_range(
 
 
 @pytest.mark.parametrize(
+    "direction, density, speed, match",
+    [
+        # direction outside {0x01, 0x02}
+        (0x00, 0x50, 0x64, "direction must be 0x01 or 0x02"),
+        (0x03, 0x50, 0x64, "direction must be 0x01 or 0x02"),
+        # density outside 0-100
+        (0x01, 101, 0x64, "density must be 0-100"),
+        # speed outside 0-100
+        (0x01, 0x50, 101, "speed must be 0-100"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_animation_param_bounds(
+    mock_aio_protocol, direction, density, speed, match
+):
+    """Animation params (direction/density/speed) are bounds-checked once here."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(1, 2, 3))] * 80
+    with pytest.raises(ValueError, match=match):
+        light._scribble_paint_groups(leds, 0x00, direction, density, speed, 80)
+
+
+@pytest.mark.parametrize(
     "colors, match",
     [
         # empty colors
@@ -5905,3 +5960,49 @@ async def test_named_effect_extended_custom_meteor(mock_aio_protocol):
     await task
 
     assert light.effect == "Meteor"
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_unmapped_mode(mock_aio_protocol, caplog):
+    """An unmapped extended-custom mode returns None and is logged for visibility."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with preset_pattern=0x25 and an unmapped mode (0x30)
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x25,  # preset_pattern = 0x25
+                0x30,  # mode = unmapped
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    with caplog.at_level(logging.DEBUG, logger="flux_led.base_device"):
+        assert light.effect is None
+    assert "Unmapped extended custom effect mode" in caplog.text
