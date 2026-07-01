@@ -33,6 +33,7 @@ from flux_led.protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_A1,
     PROTOCOL_LEDENET_ADDRESSABLE_A2,
     PROTOCOL_LEDENET_ADDRESSABLE_A3,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_SOCKET,
@@ -1421,6 +1422,67 @@ class TestLight(unittest.TestCase):
 
         light.set_effect("colorloop", 50, 50)
         self.assertEqual(mock_send.call_args, mock.call(bytearray(b"8%\x102\x9f")))
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_surplife_sync(self, mock_connect, mock_read, mock_send):
+        """0xB6 Surplife works via the dedicated protocol (sync API)."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                # 0xB6 device returns extended state format (0xEA 0x81)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                # Extended state: 27 bytes total, first 2 already read
+                self.assertEqual(expected, 25)
+                # Byte 18 (extended-state LED-count position) = 0x64 -> 100.
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+        self.assertEqual(light.model_num, 0xB6)
+        assert "Surplife" in light.model
+        assert light.supports_extended_custom_effects is True
+        # The configured LED count is exposed on the sync path too.
+        self.assertEqual(light.led_count, 100)
+
+        # Basic function: on/off issue a standard power command.
+        mock_send.reset_mock()
+        light.turnOn()
+        assert mock_send.called
+        light.turnOff()
+        assert mock_send.called
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_determine_protocol_invalid_response_raises(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """If no probe yields a valid (standard or extended) state, raise.
+
+        Exercises the ``not (is_valid_state_response or
+        is_valid_extended_state_response)`` branch (the extended check is the
+        0xB6 addition) and the final 'Cannot determine protocol' raise.
+        """
+
+        def read_data(expected):
+            # Non-0xEA, non-state garbage: fails both validators for every probe.
+            return bytearray(b"\x99" * expected)
+
+        mock_read.side_effect = read_data
+        with self.assertRaisesRegex(Exception, "Cannot determine protocol"):
+            flux_led.WifiLedBulb("192.168.1.199")
 
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")

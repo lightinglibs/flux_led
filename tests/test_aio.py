@@ -28,18 +28,22 @@ from flux_led.const import (
     WhiteChannelType,
 )
 from flux_led.protocol import (
+    LEDENET_EXTENDED_STATE_RESPONSE_LEN,
     PROTOCOL_LEDENET_8BYTE_AUTO_ON,
     PROTOCOL_LEDENET_8BYTE_DIMMABLE_EFFECTS,
     PROTOCOL_LEDENET_9BYTE,
     PROTOCOL_LEDENET_25BYTE,
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     LEDENETRawState,
     PowerRestoreState,
     PowerRestoreStates,
+    ProtocolLEDENET8Byte,
     ProtocolLEDENET25Byte,
     ProtocolLEDENETCCT,
     ProtocolLEDENETCCTWrapped,
+    ProtocolLEDENETExtendedCustom,
     RemoteConfig,
 )
 from flux_led.scanner import (
@@ -4312,7 +4316,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
 
     task = asyncio.create_task(light.async_setup(_updated_callback))
     _transport, _protocol = await mock_aio_protocol()
-    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 00 00 CS
+    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 64(count) 00 CS
     light._aio_protocol.data_received(
         bytes(
             (
@@ -4334,7 +4338,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
                 0x64,
                 0x00,
                 0x00,
-                0x00,
+                0x64,
                 0x00,
                 0x83,
             )
@@ -4342,6 +4346,112 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     )
     await task
     assert light.model_num == 0xB6
-    assert light.protocol == PROTOCOL_LEDENET_25BYTE
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
     assert light.color_modes == {COLOR_MODE_RGB, COLOR_MODE_DIM}
     assert "Surplife" in light.model
+    assert light.supports_extended_custom_effects is True
+    # The configured LED count (extended-state byte 18 = 0x64) is exposed
+    # end-to-end via the device property (async path store).
+    assert light.led_count == 100
+
+
+@pytest.mark.asyncio
+async def test_setup_0xB6_surplife_real_frame(mock_aio_protocol):
+    """0xB6 setup against the real 27-byte capture from the device.
+
+    Unlike test_setup_0xB6_surplife (a minimal synthetic frame), this feeds the
+    actual 27-byte frame captured from hardware so extended_state_to_state runs
+    against real wire data (byte 7 = 0x66, byte 8 = 0x01, byte 18 = LED count).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # EA 81 01 00 B6(model) 09 24 66 01 64 F0 00 00 00 00 64 05 00 64(count) 00 00 00 20 02 01 00 03
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60924660164f00000000064050064000000200201000003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+    assert "Surplife" in light.model
+    assert light.supports_extended_custom_effects is True
+    # Configured LED count from extended-state byte 18 (0x64 = 100).
+    assert light.led_count == 100
+
+
+def test_protocol_extended_custom_state_response_length():
+    """ProtocolLEDENETExtendedCustom expects the 27-byte extended state."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.state_response_length == LEDENET_EXTENDED_STATE_RESPONSE_LEN
+
+
+def test_protocol_extended_state_validation_0xB6():
+    """The protocols recognise the extended (0xEA 0x81) state response."""
+    ext = bytes.fromhex("ea810100b605236100640f00000064640000000083")
+    # ProtocolLEDENET8Byte (used while probing) recognises the extended frame.
+    assert ProtocolLEDENET8Byte().is_valid_extended_state_response(ext) is True
+    # The dedicated protocol only accepts the extended format.
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.is_valid_state_response(ext) is True
+    assert proto.is_valid_state_response(bytes((0x81,)) + b"\x00" * 13) is False
+
+
+def test_protocol_extended_state_to_state_white_off():
+    """white_brightness of 0 maps to both white channels off."""
+    ext = bytes.fromhex("ea810100b605236100640f000000ff000000000083")
+    result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
+    assert result[9] == 0  # warm_white
+    assert result[11] == 0  # cool_white
+
+
+def test_protocol_extended_state_to_state_white_brightness_out_of_range():
+    """white_brightness > 100 maps to both white channels off (no ValueError).
+
+    Byte 15 is a raw 0-255 value; an out-of-range white brightness must not
+    crash ``scaled_color_temp_to_white_levels`` (which rejects brightness > 100).
+    Temp (byte 14 = 0x32) is in range so only the brightness guard applies.
+    """
+    ext = bytes.fromhex("ea810100b605236100640f00000032c80000000083")
+    result = ProtocolLEDENETExtendedCustom().extended_state_to_state(ext)
+    assert result[9] == 0  # warm_white
+    assert result[11] == 0  # cool_white
+
+
+def test_protocol_extended_state_to_state_too_short_returns_empty():
+    """A truncated extended frame (< 20 bytes) returns an empty bytestring."""
+    proto = ProtocolLEDENETExtendedCustom()
+    assert proto.extended_state_to_state(b"\xea\x81\x01\x00\xb6") == b""
+
+
+def test_protocol_named_raw_state_extended_conversion():
+    """named_raw_state converts an extended frame to the standard layout."""
+    ext = bytes.fromhex("ea810100b605236100640f00000064640000000083")
+    result = ProtocolLEDENETExtendedCustom().named_raw_state(ext)
+    assert result.head == 0x81
+    assert result.model_num == 0xB6
+
+
+def test_extended_state_led_count():
+    """extended_state_led_count returns the configured LED count from real captured frames.
+
+    Real captured frames (0xB6 device):
+      LED count = 100: ea 81 01 00 b6 09 24 66 01 64 f0 00 00 00 00 64 05 00 64 00 00 00 20 02 01 00 03
+      LED count =  80: ea 81 01 00 b6 09 23 66 01 64 f0 00 00 00 00 64 05 00 50 00 00 00 20 02 01 00 03
+
+    The LED count byte is at index 18 of the raw extended state buffer.
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    frame_100 = bytes.fromhex("ea810100b60924660164f000000000640500640000002002010003")
+    frame_80 = bytes.fromhex("ea810100b60923660164f000000000640500500000002002010003")
+
+    assert proto.extended_state_led_count(frame_100) == 100
+    assert proto.extended_state_led_count(frame_80) == 80
+
+    # Too-short / invalid frame returns None
+    assert proto.extended_state_led_count(b"\xea\x81\x01") is None
+    assert proto.extended_state_led_count(b"\x00" * 27) is None

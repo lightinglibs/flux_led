@@ -7,7 +7,11 @@ import socket
 import threading
 import time
 
-from flux_led.protocol import LEDENET_TIME_RESPONSE_LEN, ProtocolLEDENETOriginal
+from flux_led.protocol import (
+    LEDENET_EXTENDED_STATE_RESPONSE_LEN,
+    LEDENET_TIME_RESPONSE_LEN,
+    ProtocolLEDENETOriginal,
+)
 
 from .base_device import LEDENETDevice
 from .const import (
@@ -276,8 +280,17 @@ class WifiLedBulb(LEDENETDevice):
                 # cannot process, recycle the connection
                 self.close()
                 continue
-            full_msg = rx + self._read_msg(protocol.state_response_length - read_bytes)
-            if not protocol.is_valid_state_response(full_msg):
+            # Extended-state-only devices (e.g. 0xB6) reply with 0xEA 0x81 and
+            # need 27 bytes total instead of the standard state length.
+            if rx[0] == 0xEA and rx[1] == 0x81:
+                additional_bytes = LEDENET_EXTENDED_STATE_RESPONSE_LEN - read_bytes
+            else:
+                additional_bytes = protocol.state_response_length - read_bytes
+            full_msg = rx + self._read_msg(additional_bytes)
+            if not (
+                protocol.is_valid_state_response(full_msg)
+                or protocol.is_valid_extended_state_response(full_msg)
+            ):
                 self.close()
                 continue
             assert isinstance(full_msg, bytearray)

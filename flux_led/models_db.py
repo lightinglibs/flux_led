@@ -47,6 +47,7 @@ from .protocol import (
     PROTOCOL_LEDENET_ADDRESSABLE_CHRISTMAS,
     PROTOCOL_LEDENET_CCT,
     PROTOCOL_LEDENET_CCT_WRAPPED,
+    PROTOCOL_LEDENET_EXTENDED_CUSTOM,
     PROTOCOL_LEDENET_ORIGINAL,
     PROTOCOL_LEDENET_ORIGINAL_CCT,
     PROTOCOL_LEDENET_SOCKET,
@@ -1310,12 +1311,11 @@ MODELS = [
         model_num=0xB6,
         models=["AK001-ZJ21413"],
         description="Surplife Outdoor Permanent Lighting",
-        # This device ONLY responds with the extended state format (0xEA 0x81),
-        # which PROTOCOL_LEDENET_25BYTE already parses, so reusing it gives basic
-        # on/off, brightness and color. A dedicated protocol class with full
-        # custom-effect/timer support is added in a follow-up.
+        # This device ONLY responds with the extended state format (0xEA 0x81).
+        # It uses the dedicated ProtocolLEDENETExtendedCustom protocol, which adds
+        # the custom-effect, segment-color and timer support specific to it.
         always_writes_white_and_colors=False,
-        protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_25BYTE)],
+        protocols=[MinVersionProtocol(0, PROTOCOL_LEDENET_EXTENDED_CUSTOM)],
         # Single white LED (not separate warm/cool), so use RGB_W not RGB_CCT
         mode_to_color_mode={0x01: COLOR_MODES_RGB_W, 0x17: COLOR_MODES_RGB_W},
         color_modes=COLOR_MODES_RGB_W,
