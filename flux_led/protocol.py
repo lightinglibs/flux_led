@@ -1470,14 +1470,31 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         #      |   |   |   |   |   |   Power state (0x23 = ON, 0x24 = OFF)
         #      |   |   |   |   |   ??
         #      |   |   |   |   Version number
-        #      |   |   |   Model number
+        #      |   |   |   Model number (0x25 = pattern ID, otherwise 0)
         #      |   |   Unknown / reserved
         #      |   Unknown / reserved
         #   Extended message header (ea 81)
 
         if len(raw_state) < 20:
             return b""
+        levels = scaled_color_temp_to_white_levels(raw_state[14], raw_state[15])
+        return self._extended_state_to_state(
+            raw_state, levels.cool_white, levels.warm_white, mode=0
+        )
 
+    def _extended_state_to_state(
+        self,
+        raw_state: bytes | bytearray,
+        cool_white: int,
+        warm_white: int,
+        mode: int,
+    ) -> bytes:
+        """Assemble a standard state response from an extended state response.
+
+        Shared by ProtocolLEDENET25Byte and its subclasses; callers supply the
+        white levels and ``mode`` byte (the parts that vary per protocol) so the
+        byte unpacking and HSV->RGB conversion live in one place.
+        """
         model_num = raw_state[4]
         version_number = raw_state[5]
         power_state = raw_state[6]
@@ -1488,13 +1505,6 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         saturation = raw_state[12]
         value = raw_state[13]
 
-        white_temp = raw_state[14]
-        white_brightness = raw_state[15]
-        levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
-
-        cool_white = levels.cool_white
-        warm_white = levels.warm_white
-
         # Convert HSV to RGB
         h = (hue * 2) / 360
         s = saturation / 100
@@ -1504,8 +1514,6 @@ class ProtocolLEDENET25Byte(ProtocolLEDENET9Byte):
         green = min(int(max(0, g_f) * 255), 255)
         blue = min(int(max(0, b_f) * 255), 255)
 
-        # Fill standard state structure
-        mode = 0
         color_mode = 0
         check_sum = 0  # Set to 0; not critical
 
@@ -1643,26 +1651,18 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
     def extended_state_to_state(self, raw_state: bytes | bytearray) -> bytes:
         """Convert extended state to standard state format.
 
-        For this protocol, the extended state mode (position 8) always contains
-        the custom effect pattern ID when preset_pattern is 0x25, and a white
-        brightness of 0 (or out-of-range temp) means the white LED is off.
+        Computes the 0xB6-specific white levels and ``mode`` byte, then defers
+        to the shared ``_extended_state_to_state`` helper for the HSV->RGB
+        conversion and assembly. A white brightness of 0 (or out-of-range
+        temp/brightness) means the white LED is off; the guard also avoids
+        passing out-of-range values to ``scaled_color_temp_to_white_levels``.
+        ``mode`` carries the custom effect pattern ID when preset_pattern is
+        0x25.
         """
         if len(raw_state) < 20:
             return b""
-
-        model_num = raw_state[4]
-        version_number = raw_state[5]
-        power_state = raw_state[6]
-        preset_pattern = raw_state[7]
-        speed = raw_state[9]
-
-        hue = raw_state[11]
-        saturation = raw_state[12]
-        value = raw_state[13]
-
         white_temp = raw_state[14]
         white_brightness = raw_state[15]
-
         if white_temp > 100 or white_brightness == 0 or white_brightness > 100:
             cool_white = 0
             warm_white = 0
@@ -1670,39 +1670,9 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             levels = scaled_color_temp_to_white_levels(white_temp, white_brightness)
             cool_white = levels.cool_white
             warm_white = levels.warm_white
-
-        # Convert HSV to RGB
-        h = (hue * 2) / 360
-        s = saturation / 100
-        v = value / 100
-        r_f, g_f, b_f = colorsys.hsv_to_rgb(h, s, v)
-        red = min(int(max(0, r_f) * 255), 255)
-        green = min(int(max(0, g_f) * 255), 255)
-        blue = min(int(max(0, b_f) * 255), 255)
-
         # mode carries the effect pattern ID in custom pattern mode (0x25)
-        mode = raw_state[8] if preset_pattern == 0x25 else 0
-        color_mode = 0
-        check_sum = 0
-
-        return bytes(
-            (
-                raw_state[1],  # Head (0x81)
-                model_num,
-                power_state,
-                preset_pattern,
-                mode,
-                speed,
-                red,
-                green,
-                blue,
-                warm_white,
-                version_number,
-                cool_white,
-                color_mode,
-                check_sum,
-            )
-        )
+        mode = raw_state[8] if raw_state[7] == 0x25 else 0
+        return self._extended_state_to_state(raw_state, cool_white, warm_white, mode)
 
     def extended_state_led_count(self, raw_state: bytes | bytearray) -> int | None:
         """Return the configured LED count from an extended state response, or None."""

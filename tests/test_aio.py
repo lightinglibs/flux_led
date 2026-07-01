@@ -4316,8 +4316,7 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
 
     task = asyncio.create_task(light.async_setup(_updated_callback))
     _transport, _protocol = await mock_aio_protocol()
-    # Real captured 27-byte extended state frame; byte 18 = 0x64 (LED count 100):
-    # EA 81 01 00 B6(model) 09 24 66 01 64 F0 00 00 00 00 64 05 00 64(count) 00 00 00 20 02 01 00 03
+    # Extended state: EA 81 01 00 B6(model) 01(ver) 23(on) 61 00 64 0F 00 00 00 64 64 00 00 64(count) 00 CS
     light._aio_protocol.data_received(
         bytes(
             (
@@ -4326,28 +4325,22 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
                 0x01,
                 0x00,
                 0xB6,
-                0x09,
-                0x24,
-                0x66,
                 0x01,
-                0x64,
-                0xF0,
-                0x00,
-                0x00,
-                0x00,
+                0x23,
+                0x61,
                 0x00,
                 0x64,
-                0x05,
+                0x0F,
                 0x00,
+                0x00,
+                0x00,
+                0x64,
                 0x64,
                 0x00,
                 0x00,
+                0x64,
                 0x00,
-                0x20,
-                0x02,
-                0x01,
-                0x00,
-                0x03,
+                0x83,
             )
         )
     )
@@ -4362,8 +4355,36 @@ async def test_setup_0xB6_surplife(mock_aio_protocol):
     assert light.led_count == 100
 
 
+@pytest.mark.asyncio
+async def test_setup_0xB6_surplife_real_frame(mock_aio_protocol):
+    """0xB6 setup against the real 27-byte capture from the device.
+
+    Unlike test_setup_0xB6_surplife (a minimal synthetic frame), this feeds the
+    actual 27-byte frame captured from hardware so extended_state_to_state runs
+    against real wire data (byte 7 = 0x66, byte 8 = 0x01, byte 18 = LED count).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # EA 81 01 00 B6(model) 09 24 66 01 64 F0 00 00 00 00 64 05 00 64(count) 00 00 00 20 02 01 00 03
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60924660164f00000000064050064000000200201000003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+    assert "Surplife" in light.model
+    assert light.supports_extended_custom_effects is True
+    # Configured LED count from extended-state byte 18 (0x64 = 100).
+    assert light.led_count == 100
+
+
 def test_protocol_extended_custom_state_response_length():
-    """ProtocolLEDENETExtendedCustom expects the 21-byte extended state."""
+    """ProtocolLEDENETExtendedCustom expects the 27-byte extended state."""
     proto = ProtocolLEDENETExtendedCustom()
     assert proto.state_response_length == LEDENET_EXTENDED_STATE_RESPONSE_LEN
 
