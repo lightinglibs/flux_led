@@ -1816,10 +1816,10 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
                     |  |  |  density (0-100)
                     |  |  direction (01=L->R, 02=R->L)
                     |  option (00=default, 01=color change)
-                    pattern_id (1-24 or 101-102)
+                    pattern_id (1-22 or 101-102)
 
         Args:
-            pattern_id: Pattern ID 1-24 or 101-102
+            pattern_id: Pattern ID 1-22 or 101-102
             colors: List of 1-8 RGB color tuples (0-255 per channel)
             speed: Animation speed 0-100 (default 50)
             density: Pattern density 0-100 (default 50)

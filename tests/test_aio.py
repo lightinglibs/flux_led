@@ -4761,11 +4761,19 @@ async def test_generate_extended_custom_effect_validation(mock_aio_protocol):
     assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
 
     # Test invalid pattern_id (0 is not valid)
-    with pytest.raises(ValueError, match="Pattern ID must be 1-24 or 101-102"):
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
         light._generate_extended_custom_effect(0, [(255, 0, 0)])
 
+    # Test invalid pattern_id (23 is not valid -- max animated id is 22)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
+        light._generate_extended_custom_effect(23, [(255, 0, 0)])
+
+    # Test invalid pattern_id (24 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
+        light._generate_extended_custom_effect(24, [(255, 0, 0)])
+
     # Test invalid pattern_id (25 is not valid)
-    with pytest.raises(ValueError, match="Pattern ID must be 1-24 or 101-102"):
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
         light._generate_extended_custom_effect(25, [(255, 0, 0)])
 
     # Test empty colors list
@@ -4784,6 +4792,10 @@ async def test_generate_extended_custom_effect_validation(mock_aio_protocol):
     with pytest.raises(ValueError, match="must be 0-255"):
         light._generate_extended_custom_effect(1, [(-1, 0, 0)])
 
+    # Test valid pattern_id 22 (max animated id)
+    result = light._generate_extended_custom_effect(22, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
     # Test valid pattern_id 101 (STATIC_GRADIENT)
     result = light._generate_extended_custom_effect(101, [(255, 0, 0)])
     assert isinstance(result, bytearray)
@@ -4794,55 +4806,19 @@ async def test_generate_extended_custom_effect_validation(mock_aio_protocol):
 
 
 @pytest.mark.asyncio
-async def test_generate_extended_custom_effect_truncate_colors(
-    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+async def test_generate_extended_custom_effect_rejects_too_many_colors(
+    mock_aio_protocol,
 ):
-    """Test that too many colors (>8) are truncated with warning."""
-    light = AIOWifiLedBulb("192.168.1.166")
+    """Test that too many colors (>8) raise ValueError instead of truncating."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
 
-    def _updated_callback(*args, **kwargs):
-        pass
+    # 9 colors (one over the 8 max) must raise; 8 is still accepted.
+    colors = [(i * 25, 0, 0) for i in range(9)]
+    with pytest.raises(ValueError, match="at most 8 colors are supported, got 9"):
+        light._generate_extended_custom_effect(1, colors)
 
-    task = asyncio.create_task(light.async_setup(_updated_callback))
-    await mock_aio_protocol()
-
-    light._aio_protocol.data_received(
-        bytes(
-            (
-                0xEA,
-                0x81,
-                0x01,
-                0x00,
-                0xB6,
-                0x01,
-                0x23,
-                0x61,
-                0x24,
-                0x64,
-                0x0F,
-                0x00,
-                0x00,
-                0x00,
-                0x64,
-                0x64,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x83,
-            )
-        )
-    )
-    await task
-
-    # 10 colors (more than 8 max)
-    colors = [(i * 25, 0, 0) for i in range(10)]
-
-    with caplog.at_level(logging.WARNING):
-        result = light._generate_extended_custom_effect(1, colors)
-
+    result = light._generate_extended_custom_effect(1, colors[:8])
     assert isinstance(result, bytearray)
-    assert "truncating" in caplog.text.lower()
 
 
 # Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
@@ -4902,55 +4878,19 @@ async def test_generate_custom_segment_colors_validation(mock_aio_protocol):
 
 
 @pytest.mark.asyncio
-async def test_generate_custom_segment_colors_truncate(
-    mock_aio_protocol, caplog: pytest.LogCaptureFixture
+async def test_generate_custom_segment_colors_rejects_too_many_segments(
+    mock_aio_protocol,
 ):
-    """Test that too many segments (>20) are truncated with warning."""
-    light = AIOWifiLedBulb("192.168.1.166")
+    """Test that too many segments (>20) raise ValueError instead of truncating."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
 
-    def _updated_callback(*args, **kwargs):
-        pass
+    # 21 segments (one over the 20 max) must raise; 20 is still accepted.
+    segments = [(i * 10, 0, 0) for i in range(21)]
+    with pytest.raises(ValueError, match="at most 20 segments are supported, got 21"):
+        light._generate_custom_segment_colors(segments)
 
-    task = asyncio.create_task(light.async_setup(_updated_callback))
-    await mock_aio_protocol()
-
-    light._aio_protocol.data_received(
-        bytes(
-            (
-                0xEA,
-                0x81,
-                0x01,
-                0x00,
-                0xB6,
-                0x01,
-                0x23,
-                0x61,
-                0x24,
-                0x64,
-                0x0F,
-                0x00,
-                0x00,
-                0x00,
-                0x64,
-                0x64,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x83,
-            )
-        )
-    )
-    await task
-
-    # 25 segments (more than 20 max)
-    segments = [(i * 10, 0, 0) for i in range(25)]
-
-    with caplog.at_level(logging.WARNING):
-        result = light._generate_custom_segment_colors(segments)
-
+    result = light._generate_custom_segment_colors(segments[:20])
     assert isinstance(result, bytearray)
-    assert "truncating" in caplog.text.lower()
 
 
 # Tests for construct_levels_change (protocol.py lines 1826-1861)
@@ -5661,6 +5601,136 @@ async def test_async_set_scribble_off_group(mock_aio_protocol):
     off = _inner_of(sent[1])
     assert red[13:] == OFF0_80
     assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_raw_int_direction(mock_aio_protocol):
+    """A raw int direction (e.g. 0x02) is accepted, not just the enum."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 80
+        # Passing a raw int must not raise AttributeError on direction.value.
+        await light.async_set_scribble(leds, direction=0x02, enter_mode=False)
+    assert len(sent) == 1
+    paint = _inner_of(sent[0])
+    assert paint[:2] == b"\xe1\x26"
+    assert paint[3] == 0x02  # direction byte carried through as the raw int
+
+
+@pytest.mark.parametrize(
+    "leds, num_leds, match",
+    [
+        # empty leds
+        ([], 80, "leds must not be empty"),
+        # num_leds out of 1..255 (0)
+        ([ScribbleLED(rgb=(1, 2, 3))], 0, r"num_leds must be 1\.\.255"),
+        # num_leds out of 1..255 (256)
+        ([ScribbleLED(rgb=(1, 2, 3))] * 256, 256, r"num_leds must be 1\.\.255"),
+        # num_leds-vs-len mismatch (num_leds != len(leds))
+        ([ScribbleLED(rgb=(1, 2, 3))] * 80, 79, r"does not match"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_count_guards(
+    mock_aio_protocol, leds, num_leds, match
+):
+    """Cover the count/length ValueError guards in _scribble_paint_groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    light._extended_led_count = None  # bypass led_count-vs-len check for these cases
+    with pytest.raises(ValueError, match=match):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, num_leds)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_led_count_mismatch_guard(mock_aio_protocol):
+    """led_count-vs-len mismatch raises (device reports 80, we pass 40)."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+    leds = [ScribbleLED(rgb=(1, 2, 3))] * 40
+    with pytest.raises(ValueError, match="device has 80"):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 40)
+
+
+@pytest.mark.parametrize(
+    "led, match",
+    [
+        # rgb AND white both set (mutually exclusive)
+        (ScribbleLED(rgb=(1, 2, 3), white=50), "mutually exclusive"),
+        # rgb channel out of 0-255
+        (ScribbleLED(rgb=(256, 0, 0)), "rgb values must be 0-255"),
+        # white out of 0-100
+        (ScribbleLED(white=101), "white must be 0-100"),
+        # blink_speed out of 0-100
+        (ScribbleLED(rgb=(1, 2, 3), blink_speed=101), "blink_speed must be 0-100"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_per_led_guards(mock_aio_protocol, led, match):
+    """Cover the per-LED ValueError guards in _scribble_paint_groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [led] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError, match=match):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.parametrize(
+    "effect_id",
+    [-1, 9, 0x10],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_effect_id_out_of_range(
+    mock_aio_protocol, effect_id
+):
+    """effect id outside 0x00-0x08 raises ValueError."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(1, 2, 3))] * 80
+    with pytest.raises(ValueError, match=r"effect id must be 0x00-0x08"):
+        light._scribble_paint_groups(leds, effect_id, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.parametrize(
+    "colors, match",
+    [
+        # empty colors
+        ([], "at least one color"),
+        # color tuple wrong length
+        ([(255, 0)], r"must be .* tuple"),
+        # color channel out of 0-255 (high)
+        ([(256, 0, 0)], "must be 0-255"),
+        # color channel out of 0-255 (low)
+        ([(-1, 0, 0)], "must be 0-255"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_color_guards(
+    mock_aio_protocol, colors, match
+):
+    """Cover the color/empty ValueError guards in _generate_extended_custom_effect."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_extended_custom_effect(1, colors)
+
+
+@pytest.mark.parametrize(
+    "segments, match",
+    [
+        # color tuple wrong length
+        ([(255, 0)], r"must be .* tuple"),
+        # color channel out of 0-255 (high)
+        ([(256, 0, 0)], "must be 0-255"),
+        # color channel out of 0-255 (low)
+        ([(0, -1, 0)], "must be 0-255"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_color_guards(
+    mock_aio_protocol, segments, match
+):
+    """Cover the color-tuple ValueError guards in _generate_custom_segment_colors."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_custom_segment_colors(segments)
 
 
 @pytest.mark.asyncio

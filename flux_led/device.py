@@ -409,7 +409,7 @@ class WifiLedBulb(LEDENETDevice):
         Only supported on devices using the extended protocol (e.g., 0xB6).
 
         Args:
-            pattern_id: Pattern ID (1-24 or 101-102). See ExtendedCustomEffectPattern.
+            pattern_id: Pattern ID (1-22 or 101-102). See ExtendedCustomEffectPattern.
             colors: List of 1-8 RGB color tuples, e.g., [(255, 0, 0), (0, 255, 0)]
             speed: Animation speed 0-100 (default 50)
             density: Pattern density 0-100 (default 50)
@@ -455,7 +455,7 @@ class WifiLedBulb(LEDENETDevice):
         self,
         leds: list[ScribbleLED],
         effect: ScribbleEffect | int = ScribbleEffect.STATIC,
-        direction: ExtendedCustomEffectDirection = (
+        direction: ExtendedCustomEffectDirection | int = (
             ExtendedCustomEffectDirection.LEFT_TO_RIGHT
         ),
         density: int = 80,
@@ -477,13 +477,18 @@ class WifiLedBulb(LEDENETDevice):
         """
         if not self.supports_scribble:
             raise ValueError("device does not support scribble")
-        num_leds = self.led_count or len(leds)
+        num_leds = self.led_count if self.led_count is not None else len(leds)
+        direction_val = (
+            direction.value
+            if isinstance(direction, ExtendedCustomEffectDirection)
+            else int(direction)
+        )
         if enter_mode:
             self._send_and_read_with_retry(
                 self._generate_scribble_init(num_leds), 0, retry=retry
             )
         for msg in self._scribble_paint_groups(
-            leds, effect, direction.value, density, speed, num_leds
+            leds, effect, direction_val, density, speed, num_leds
         ):
             self._send_and_read_with_retry(msg, 0, retry=retry)
 

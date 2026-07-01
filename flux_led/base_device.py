@@ -1366,16 +1366,13 @@ class LEDENETDevice:
         Only supported on devices using the extended protocol (e.g., 0xB6).
         """
         # Validate pattern_id
-        valid_ids = set(range(1, 25)) | {101, 102}
+        valid_ids = set(range(1, 23)) | {101, 102}
         if pattern_id not in valid_ids:
-            raise ValueError(f"Pattern ID must be 1-24 or 101-102, got {pattern_id}")
+            raise ValueError(f"Pattern ID must be 1-22 or 101-102, got {pattern_id}")
 
-        # Truncate if more than 8 colors
+        # Reject more than 8 colors (the wire format supports at most 8)
         if len(colors) > 8:
-            _LOGGER.warning(
-                "Too many colors in %s, truncating list to %s", len(colors), 8
-            )
-            colors = colors[:8]
+            raise ValueError(f"at most 8 colors are supported, got {len(colors)}")
 
         # Require at least one color
         if len(colors) == 0:
@@ -1406,10 +1403,9 @@ class LEDENETDevice:
         Args:
             segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
         """
-        # Truncate if more than 20 segments
+        # Reject more than 20 segments (the wire format supports at most 20)
         if len(segments) > 20:
-            _LOGGER.warning("Too many segments (%s), truncating to 20", len(segments))
-            segments = segments[:20]
+            raise ValueError(f"at most 20 segments are supported, got {len(segments)}")
 
         # Validate color tuples
         for idx, color in enumerate(segments):

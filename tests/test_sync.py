@@ -1607,6 +1607,42 @@ class TestLight(unittest.TestCase):
         assert self._inner_of(sent[1])[:2] == b"\xe1\x26"
         assert self._inner_of(sent[2])[:2] == b"\xe1\x26"
 
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setScribble_raw_int_direction(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """setScribble accepts a raw int direction, not just the enum."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+        mock_send.reset_mock()
+
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * light.led_count
+        # A raw int direction (0x02) must not raise AttributeError on
+        # direction.value and must carry through as the wire direction byte.
+        light.setScribble(leds, direction=0x02, enter_mode=False)
+
+        assert mock_send.call_count == 1
+        paint = self._inner_of(mock_send.call_args_list[0].args[0])
+        assert paint[:2] == b"\xe1\x26"
+        assert paint[3] == 0x02  # direction byte
+
     @staticmethod
     def _inner_of(wrapped: bytearray) -> bytes:
         """Extract the inner message from a B0B1B2B3-wrapped result."""
