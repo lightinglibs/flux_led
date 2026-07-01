@@ -1789,9 +1789,12 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
 
         This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+
+        Equivalent to the RGBW variant with white=0, which yields the same
+        [H/2, S, V, 0x00, 0x00] layout, so delegate to avoid duplicating the
+        conversion logic.
         """
-        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
-        return [int(h * 180), int(s * 100), int(v * 100), 0x00, 0x00]
+        return self._rgb_to_hsv_bytes_rgbw(r, g, b, 0)
 
     def construct_extended_custom_effect(
         self,

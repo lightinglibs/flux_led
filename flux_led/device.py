@@ -419,6 +419,8 @@ class WifiLedBulb(LEDENETDevice):
             option: Pattern-specific option (default 0)
             retry: Number of retries on failure
         """
+        if not self.supports_extended_custom_effects:
+            raise ValueError("device does not support extended custom effects")
         self._send_and_read_with_retry(
             self._generate_extended_custom_effect(
                 pattern_id, colors, speed, density, direction, option
@@ -441,6 +443,8 @@ class WifiLedBulb(LEDENETDevice):
             segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
             retry: Number of retries on failure
         """
+        if not self.supports_extended_custom_effects:
+            raise ValueError("device does not support extended custom effects")
         self._send_and_read_with_retry(
             self._generate_custom_segment_colors(segments),
             0,
@@ -471,6 +475,8 @@ class WifiLedBulb(LEDENETDevice):
 
         Only supported on devices using the extended protocol (e.g., 0xB6).
         """
+        if not self.supports_scribble:
+            raise ValueError("device does not support scribble")
         num_leds = self.led_count or len(leds)
         if enter_mode:
             self._send_and_read_with_retry(

@@ -5051,7 +5051,7 @@ def test_protocol_construct_custom_segment_colors():
     proto = ProtocolLEDENETExtendedCustom()
 
     # Test with a few segments
-    segments = [(255, 0, 0), None, (0, 255, 0)]
+    segments = [(255, 0, 0), None, (0, 0, 255)]
     result = proto.construct_custom_segment_colors(segments)
 
     assert isinstance(result, bytearray)
@@ -5060,6 +5060,18 @@ def test_protocol_construct_custom_segment_colors():
     assert result[1] == 0xB1
     assert result[2] == 0xB2
     assert result[3] == 0xB3
+
+    # Pin the full inner E1 22 payload: header + 0x14 (20) count byte, then
+    # one 5-byte [H/2, S, V, 0x00, 0x00] record per segment, padded to 20.
+    inner = _inner_of(result)
+    header = _h("e1 22 00 00 00 00 14")
+    red = _h("00 64 64 00 00")  # (255,0,0): hue 0, sat 100, val 100
+    off = _h("00 00 00 00 00")  # None / off segment
+    blue = _h("78 64 64 00 00")  # (0,0,255): hue 120 -> byte 0x78, sat/val 100
+    # 3 provided segments (red, off, blue) + 17 off segments = 20 total.
+    expected = header + red + off + blue + off * 17
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
 
 
 def test_protocol_construct_custom_segment_colors_all_off():
@@ -5545,6 +5557,35 @@ async def _setup_scribble_light(mock_aio_protocol, led_count_byte=0x50):
     await task
     transport.reset_mock()
     return light, transport
+
+
+@pytest.mark.asyncio
+async def test_async_extended_custom_methods_raise_on_unsupported_device(
+    mock_aio_protocol,
+):
+    """Async extended-custom methods raise ValueError on a non-0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # Standard RGBCW bulb (0x35) -- does not use the extended custom protocol.
+    light._aio_protocol.data_received(
+        b"\x81\x35\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xee"
+    )
+    await task
+    assert light.model_num == 0x35
+    assert not light.supports_extended_custom_effects
+    assert not light.supports_scribble
+
+    with pytest.raises(ValueError):
+        await light.async_set_extended_custom_effect(1, [(255, 0, 0)])
+    with pytest.raises(ValueError):
+        await light.async_set_custom_segment_colors([(255, 0, 0)])
+    with pytest.raises(ValueError):
+        await light.async_set_scribble([ScribbleLED(rgb=(255, 0, 0))])
 
 
 @pytest.mark.asyncio

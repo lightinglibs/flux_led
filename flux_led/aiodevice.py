@@ -446,6 +446,8 @@ class AIOWifiLedBulb(LEDENETDevice):
             direction: Animation direction (0x01=L->R, 0x02=R->L)
             option: Pattern-specific option (default 0)
         """
+        if not self.supports_extended_custom_effects:
+            raise ValueError("device does not support extended custom effects")
         await self._async_send_msg(
             self._generate_extended_custom_effect(
                 pattern_id, colors, speed, density, direction, option
@@ -464,6 +466,8 @@ class AIOWifiLedBulb(LEDENETDevice):
         Args:
             segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
         """
+        if not self.supports_extended_custom_effects:
+            raise ValueError("device does not support extended custom effects")
         await self._async_send_msg(self._generate_custom_segment_colors(segments))
 
     async def async_set_scribble(
@@ -490,6 +494,8 @@ class AIOWifiLedBulb(LEDENETDevice):
 
         Only supported on devices using the extended protocol (e.g., 0xB6).
         """
+        if not self.supports_scribble:
+            raise ValueError("device does not support scribble")
         num_leds = self.led_count or len(leds)
         if enter_mode:
             await self._async_send_msg(self._generate_scribble_init(num_leds))
