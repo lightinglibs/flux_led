@@ -4390,6 +4390,91 @@ async def test_setup_0xB6_surplife_real_frame(mock_aio_protocol):
     assert light.led_count == 100
 
 
+@pytest.mark.asyncio
+async def test_0xB6_colorful_solid_red_full(mock_aio_protocol):
+    """0xB6 "Colorful" solid red at full brightness is a plain color, not an effect.
+
+    Hardware capture: preset_pattern=0x24, mode=0x01 -> reported as a color with
+    no effect (verified on device).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923240164f0b46464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect is None
+    assert light.is_on is True
+    assert light.rgb == (255, 0, 0)
+    assert light.brightness == 255
+
+
+@pytest.mark.asyncio
+async def test_0xB6_colorful_solid_red_dim(mock_aio_protocol):
+    """0xB6 "Colorful" solid red dimmed to 30% is a plain color, not an effect.
+
+    Hardware capture: preset_pattern=0x24, mode=0x01, value byte 0x1e (30%).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923240164f0b4641eff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect is None
+    assert light.is_on is True
+    # Clearly dimmed (well below the full-brightness value of 255).
+    assert light.brightness == 76
+
+
+@pytest.mark.asyncio
+async def test_0xB6_scene_wave(mock_aio_protocol):
+    """0xB6 "Scenes" animated effect reports preset_pattern=0x25, mode=effect id."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923250164f0b46464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect == "Wave"
+
+
+@pytest.mark.asyncio
+async def test_0xB6_scene_static_fill(mock_aio_protocol):
+    """0xB6 "Scenes" Static Fill reports preset_pattern=0x25, mode=0x66."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923256650f0786464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect == "Static Fill"
+
+
 def test_protocol_extended_custom_state_response_length():
     """ProtocolLEDENETExtendedCustom expects the 27-byte extended state."""
     proto = ProtocolLEDENETExtendedCustom()

@@ -204,7 +204,6 @@ ASSESSABLE_MULTI_COLOR_NAME_ID = {
 # Extended custom effect pattern names for 0xB6 (Surplife) devices
 # These map to ExtendedCustomEffectPattern enum values
 EXTENDED_CUSTOM_EFFECT_ID_NAME = {
-    0x00: "Segments",  # Custom segment colors mode
     0x01: "Wave",
     0x02: "Meteor",
     0x03: "Streamer",
@@ -229,7 +228,6 @@ EXTENDED_CUSTOM_EFFECT_ID_NAME = {
     0x16: "Gradient Overlay",
     0x65: "Static Gradient",
     0x66: "Static Fill",
-    0x6E: "Solid Color",  # Mode when solid color is set
 }
 EXTENDED_CUSTOM_EFFECT_NAME_ID = {
     v: k for k, v in EXTENDED_CUSTOM_EFFECT_ID_NAME.items()

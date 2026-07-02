@@ -1809,7 +1809,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
 
         Protocol format:
           0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
-         e1 21 00 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
+         e1 21 01 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
                     |  |  |  |  |                    |  colors (5 bytes each)
                     |  |  |  |  |                    color count
                     |  |  |  |  speed (0-100)
@@ -1846,7 +1846,7 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             [
                 0xE1,
                 0x21,
-                0x00,  # Command type
+                0x01,  # Command type
                 0x64,  # Constant (100)
                 pattern_id,
                 option,
