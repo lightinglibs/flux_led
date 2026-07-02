@@ -1717,71 +1717,50 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         cool_white: int | None,
         write_mode: LevelWriteMode | int,
     ) -> list[bytearray]:
-        """Construct level change using 0xE1 0x21 STATIC_FILL command.
+        """Construct a level change using a uniform 0xE1 0x22 fill command.
 
-        The parent's 0xE0 wrapped command works for RGB but not for CCT/white.
-        This override uses extended custom effect command (0xE1 0x21) with
-        STATIC_FILL pattern (0x66) which supports both RGB and white.
+        Sending a solid color via the 0xE1 0x21 STATIC_FILL pattern puts the
+        device into a "Scene" state (preset_pattern=0x25, mode=0x66), so a
+        plain color-set reports back as the effect "Static Fill". The vendor
+        app instead sets a solid color with a UNIFORM 0xE1 0x22 command (all
+        20 segments identical), which lands the device in preset_pattern=0x24
+        ("Colorful" = a plain color) and reports effect=None with the correct
+        rgb/brightness. This is hardware-verified on the 0xB6 device.
 
         Inner message format (before wrapping):
-          pos  0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20
-              E1 21 00 64 66 00 01 32 32 00 00 00 00 00 00 01 HH SS VV 00 WW
-                        |  |  |  |  |  |                    |  |  |  |  |  |
-                        |  |  |  |  |  |                    |  |  |  |  |  white (0-255)
-                        |  |  |  |  |  |                    |  |  |  |  unused
-                        |  |  |  |  |  |                    |  |  |  value (0-100)
-                        |  |  |  |  |  |                    |  |  saturation (0-100)
-                        |  |  |  |  |  |                    |  hue/2 (0-180)
-                        |  |  |  |  |  |                    color count (1)
-                        |  |  |  |  |  reserved (6 bytes, all 0x00)
-                        |  |  |  |  speed (0x32 = 50)
-                        |  |  |  density (0x32 = 50)
-                        |  |  direction (0x01 = L->R)
-                        |  option (0x00 = default)
-                        pattern ID (0x66 = STATIC_FILL)
+          pos  0  1  2  3  4  5  6  [ 5-byte segment ] x 20
+              E1 22 00 00 00 00 14  [ H/2 S V 00 WW ]
+                                 |  each of the 20 identical segments:
+                                 |    color: [H/2, S, V, 0x00, 0x00]
+                                 |    white: [0x00, 0x64, 0x00, 0x00, W]
+                                 segment count (0x14 = 20)
 
-        Note: Device has single white LED, so warm_white and cool_white
-        are combined into one brightness value.
+        The device is single-white RGB and the app sends EITHER a color OR a
+        white, never both. Warm and cool white are combined into a single
+        white level.
         """
-        # STATIC_FILL pattern ID
-        STATIC_FILL = 0x66
-
-        r = red or 0
-        g = green or 0
-        b = blue or 0
-
-        # Combine warm and cool white into single white brightness
+        # Combine warm and cool white into single white level
         # (device only has one white LED)
         w = min((warm_white or 0) + (cool_white or 0), 255)
 
-        # Build extended custom effect command with RGBW support
-        msg = bytearray(
-            [
-                0xE1,
-                0x21,
-                0x00,  # Command type
-                0x64,  # Constant (100)
-                STATIC_FILL,  # Pattern ID
-                0x00,  # Option
-                0x01,  # Direction (L->R)
-                0x32,  # Density (50)
-                0x32,  # Speed (50)
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x00,
-                0x00,  # Reserved (6 bytes)
-                0x01,  # Color count (1)
-            ]
-        )
+        if w > 0 and not (red or green or blue):
+            # WHITE: scale 0-255 white to the device's 0-100 white level.
+            # S byte MUST be 0x64 (100); with S=0 the device silently ignores
+            # the frame (hardware-verified).
+            white_level = max(0, min(100, round(w * 100 / 255)))
+            segment = [0x00, 0x64, 0x00, 0x00, white_level]
+        else:
+            # COLOR: [H/2, S, V, 0x00, 0x00]
+            segment = self._rgb_to_hsv_bytes((red or 0), (green or 0), (blue or 0))
 
-        # Add RGBW color as HSV with white in 5th byte
-        msg.extend(self._rgb_to_hsv_bytes_rgbw(r, g, b, w))
+        # Uniform E1 22 fill: header + segment repeated for all 20 segments
+        inner = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+        for _ in range(20):
+            inner.extend(segment)
 
         return [
             self.construct_wrapped_message(
-                msg, inner_pre_constructed=True, version=0x02
+                inner, inner_pre_constructed=True, version=0x02
             )
         ]
 

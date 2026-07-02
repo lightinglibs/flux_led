@@ -5014,10 +5014,15 @@ async def test_generate_custom_segment_colors_rejects_too_many_segments(
 
 
 def test_protocol_construct_levels_change_0xB6():
-    """Test construct_levels_change uses STATIC_FILL for 0xB6 protocol."""
+    """Test construct_levels_change sets a color via a uniform E1 22 fill.
+
+    A solid color must land the device in preset 0x24 ("Colorful"), so it is
+    sent as a uniform E1 22 (all 20 segments identical), not an E1 21 Static
+    Fill (hardware-verified).
+    """
     proto = ProtocolLEDENETExtendedCustom()
 
-    # Test with RGB values
+    # Test with RGB values (pure red)
     result = proto.construct_levels_change(
         persist=1,
         red=255,
@@ -5037,19 +5042,32 @@ def test_protocol_construct_levels_change_0xB6():
     assert msg[2] == 0xB2
     assert msg[3] == 0xB3
 
+    # Pin the full inner E1 22 uniform frame.
+    inner = _inner_of(msg)
+    header = _h("e1 22 00 00 00 00 14")
+    # (255,0,0): hue 0, sat 100, val 100 -> [00 64 64 00 00]
+    red_seg = _h("00 64 64 00 00")
+    expected = header + red_seg * 20
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
 
 def test_protocol_construct_levels_change_with_white():
-    """Test construct_levels_change combines warm and cool white."""
+    """Test construct_levels_change combines warm and cool white.
+
+    A white-only set is sent as a uniform E1 22 with the literal white segment
+    [00 64 00 00 W], where W is the 0-100 white level (S byte MUST be 0x64).
+    """
     proto = ProtocolLEDENETExtendedCustom()
 
-    # Test with white values
+    # Test with white values: warm_white=255 -> W = round(255*100/255) = 100
     result = proto.construct_levels_change(
         persist=1,
         red=0,
         green=0,
         blue=0,
-        warm_white=100,
-        cool_white=50,
+        warm_white=255,
+        cool_white=0,
         write_mode=0,
     )
 
@@ -5057,9 +5075,17 @@ def test_protocol_construct_levels_change_with_white():
     msg = result[0]
     assert isinstance(msg, bytearray)
 
+    inner = _inner_of(msg)
+    header = _h("e1 22 00 00 00 00 14")
+    # W = 100 = 0x64; segment [00 64 00 00 64]
+    white_seg = _h("00 64 00 00 64")
+    expected = header + white_seg * 20
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
 
 def test_protocol_construct_levels_change_white_clamping():
-    """Test that combined white is clamped to 255."""
+    """Test that combined white is clamped to 255 (W = 100)."""
     proto = ProtocolLEDENETExtendedCustom()
 
     # Test with white values that exceed 255 when combined
@@ -5069,12 +5095,18 @@ def test_protocol_construct_levels_change_white_clamping():
         green=0,
         blue=0,
         warm_white=200,
-        cool_white=200,  # Total would be 400, should clamp to 255
+        cool_white=200,  # Total would be 400, should clamp to 255 -> W=100
         write_mode=0,
     )
 
     assert len(result) == 1
     assert isinstance(result[0], bytearray)
+
+    inner = _inner_of(result[0])
+    header = _h("e1 22 00 00 00 00 14")
+    white_seg = _h("00 64 00 00 64")  # clamped white -> W=100
+    expected = header + white_seg * 20
+    assert inner == expected
 
 
 def test_protocol_rgb_to_hsv_bytes_rgbw():
