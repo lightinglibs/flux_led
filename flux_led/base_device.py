@@ -641,7 +641,9 @@ class LEDENETDevice:
         """Return the list of available effects."""
         effects: Iterable[str] = []
         protocol = self.protocol
-        if protocol in OLD_EFFECTS_PROTOCOLS:
+        if self.supports_extended_custom_effects:
+            effects = EXTENDED_CUSTOM_EFFECT_ID_NAME.values()
+        elif protocol in OLD_EFFECTS_PROTOCOLS:
             effects = ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.values()
         elif protocol in NEW_EFFECTS_PROTOCOLS:
             effects = ADDRESSABLE_EFFECT_ID_NAME.values()
@@ -670,7 +672,7 @@ class LEDENETDevice:
         """Return available extended custom effect patterns, or None if not supported."""
         if not self.supports_extended_custom_effects:
             return None
-        return [p.name.lower().replace("_", " ") for p in ExtendedCustomEffectPattern]
+        return list(EXTENDED_CUSTOM_EFFECT_ID_NAME.values())
 
     @property
     def effect(self) -> str | None:
@@ -1374,9 +1376,19 @@ class LEDENETDevice:
         # Accept the public enums (ExtendedCustomEffectPattern/Direction/Option)
         # as well as plain ints by coercing enum members to their int value up
         # front, before the int-literal validation below.
-        pattern_id = pattern_id.value if isinstance(pattern_id, Enum) else pattern_id
-        direction = direction.value if isinstance(direction, Enum) else direction
-        option = option.value if isinstance(option, Enum) else option
+        pattern_id = (
+            pattern_id.value
+            if isinstance(pattern_id, ExtendedCustomEffectPattern)
+            else pattern_id
+        )
+        direction = (
+            direction.value
+            if isinstance(direction, ExtendedCustomEffectDirection)
+            else direction
+        )
+        option = (
+            option.value if isinstance(option, ExtendedCustomEffectOption) else option
+        )
 
         # Validate pattern_id
         valid_ids = set(range(1, 23)) | {101, 102}
@@ -1561,11 +1573,16 @@ class LEDENETDevice:
                 raise ValueError(f"LED {idx}: white must be 0-100")
             if not 0 <= led.blink_speed <= 100:
                 raise ValueError(f"LED {idx}: blink_speed must be 0-100")
-            key = (led.rgb, led.white, led.blink_mode, led.blink_speed)
+            key = (
+                led.rgb,
+                led.white,
+                led.blink_mode,
+                led.blink_speed if led.blink_mode is not ScribbleBlinkMode.NONE else 0,
+            )
             groups.setdefault(key, []).append(idx)
 
         messages: list[bytearray] = []
-        for (rgb, white, blink_mode, blink_speed), indices in groups.items():
+        for (rgb, white, blink_mode, _blink_speed), indices in groups.items():
             # Off LEDs (rgb None and white None) paint as color (0,0,0).
             color: tuple[int, int, int] | None
             paint_white: int | None
@@ -1575,6 +1592,10 @@ class LEDENETDevice:
             else:
                 color = rgb
                 paint_white = white
+            # The group key normalizes blink_speed to 0 while blink is off, so
+            # take the emitted blink_speed from a representative LED to preserve
+            # the captured wire format (the device still carries a blink_speed
+            # byte even when not blinking; it is simply ignored there).
             messages.append(
                 self._generate_scribble_paint(
                     effect=effect_id,
@@ -1584,7 +1605,7 @@ class LEDENETDevice:
                     color=color,
                     white=paint_white,
                     blink_mode=blink_mode.value,
-                    blink_speed=blink_speed,
+                    blink_speed=leds[indices[0]].blink_speed,
                     led_indices=indices,
                     num_leds=num_leds,
                 )

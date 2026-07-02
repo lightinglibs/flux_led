@@ -5011,6 +5011,33 @@ async def test_async_set_extended_custom_effect_accepts_enums(mock_aio_protocol)
     assert _inner_of(enum_bytes) == _inner_of(int_bytes)
 
 
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_rejects_wrong_enum(mock_aio_protocol):
+    """A mismatched enum type must not be silently unwrapped into an int.
+
+    ScribbleEffect.ACCUMULATE == 0x08 would coerce into an in-range pattern id
+    if any Enum were accepted. Coercion is narrowed to the expected enum type,
+    so the wrong enum falls through unchanged and fails validation.
+    """
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+
+    with pytest.raises(ValueError):
+        light._generate_extended_custom_effect(
+            pattern_id=ScribbleEffect.ACCUMULATE, colors=[(255, 0, 0)]
+        )
+
+    with pytest.raises(ValueError):
+        await light.async_set_extended_custom_effect(
+            pattern_id=ScribbleEffect.ACCUMULATE, colors=[(255, 0, 0)]
+        )
+
+    # The correct enum still works.
+    result = light._generate_extended_custom_effect(
+        pattern_id=ExtendedCustomEffectPattern.WAVE, colors=[(255, 0, 0)]
+    )
+    assert result[0] == 0xB0
+
+
 # Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
 
 
@@ -5676,6 +5703,25 @@ async def test_scribble_paint_groups_blink_grouping(mock_aio_protocol):
 
 
 @pytest.mark.asyncio
+async def test_scribble_paint_groups_non_blinking_ignore_blink_speed(
+    mock_aio_protocol,
+):
+    """Non-blinking LEDs with the same color coalesce regardless of blink_speed.
+
+    blink_speed is only meaningful while blinking; with blink off it must not
+    split otherwise-identical LEDs into redundant E1 26 paint groups.
+    """
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [
+        ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.NONE, blink_speed=50)
+    ] * 40 + [
+        ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.NONE, blink_speed=100)
+    ] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 1  # same color, blink off -> single group
+
+
+@pytest.mark.asyncio
 async def test_scribble_paint_groups_off_group_color_zero(mock_aio_protocol):
     light, _t = await _setup_scribble_light(mock_aio_protocol)
     leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
@@ -6062,10 +6108,11 @@ async def test_extended_custom_effect_pattern_list_0xB6(mock_aio_protocol):
     assert pattern_list is not None
     assert isinstance(pattern_list, list)
     assert len(pattern_list) > 0
-    # Check some expected patterns
-    assert "wave" in pattern_list
-    assert "meteor" in pattern_list
-    assert "breathe" in pattern_list
+    # Check some expected patterns (Title Case, matching the reported effect names)
+    assert "Wave" in pattern_list
+    assert "Meteor" in pattern_list
+    assert "Breathe" in pattern_list
+    assert "Static Fill" in pattern_list
 
 
 @pytest.mark.asyncio
@@ -6136,6 +6183,37 @@ async def test_named_effect_extended_custom_0xB6(mock_aio_protocol):
 
     # Effect should be "Wave" from EXTENDED_CUSTOM_EFFECT_ID_NAME
     assert light.effect == "Wave"
+
+
+@pytest.mark.asyncio
+async def test_effect_list_includes_extended_custom_effects_0xB6(mock_aio_protocol):
+    """effect_list for a 0xB6 device exposes the extended custom effect names.
+
+    The reported effect (e.g. "Wave") must be a member of effect_list so that
+    consumers (e.g. Home Assistant) that validate effect against effect_list do
+    not reject it.
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 Wave scene frame (preset_pattern 0x25, mode 0x01 = Wave).
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923250150f0b46464ff000500500000002002010003")
+    )
+    await task
+
+    assert light.effect == "Wave"
+    assert light.effect in light.effect_list
+    # A couple of other extended names are present too.
+    assert "Static Fill" in light.effect_list
+    assert "Meteor" in light.effect_list
+    # The reported effect also round-trips through the pattern list (Title Case).
+    assert light.effect in light.extended_custom_effect_pattern_list
 
 
 @pytest.mark.asyncio
