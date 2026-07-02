@@ -641,9 +641,14 @@ class LEDENETDevice:
         """Return the list of available effects."""
         effects: Iterable[str] = []
         protocol = self.protocol
-        if self.supports_extended_custom_effects:
-            effects = EXTENDED_CUSTOM_EFFECT_ID_NAME.values()
-        elif protocol in OLD_EFFECTS_PROTOCOLS:
+        # TODO: 0xB6 extended custom effects are reported by `effect` and are
+        # settable via the dedicated setExtendedCustomEffect API, but are not yet
+        # wired into the generic effect_list/set_effect path -- they require a
+        # color list, which set_effect(name, speed) cannot supply. Until a
+        # follow-up PR integrates them (set_effect -> setExtendedCustomEffect), a
+        # running extended scene may report an `effect` name not present here;
+        # discovery is available via `extended_custom_effect_pattern_list`.
+        if protocol in OLD_EFFECTS_PROTOCOLS:
             effects = ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.values()
         elif protocol in NEW_EFFECTS_PROTOCOLS:
             effects = ADDRESSABLE_EFFECT_ID_NAME.values()
