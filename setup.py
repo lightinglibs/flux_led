@@ -30,7 +30,9 @@ dev_requirements = [
 
 requirements = [
     "webcolors",
-    "async_timeout>=3.0.0",
+    # asyncio.timeout exists natively from 3.11 (see flux_led/aioutils.py); the
+    # async_timeout backport is only imported on older interpreters.
+    "async_timeout>=3.0.0; python_version < '3.11'",
 ]
 
 
