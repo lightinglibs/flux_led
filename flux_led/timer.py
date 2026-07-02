@@ -136,7 +136,7 @@ class LedTimer:
     def setModeSunrise(
         self, startBrightness: int, endBrightness: int, duration: int
     ) -> None:
-        self.mode = "sunrise"
+        self.mode = BuiltInTimer.valtostr(BuiltInTimer.sunrise)
         self.turn_on = True
         self.pattern_code = BuiltInTimer.sunrise
         self.brightness_start = utils.percentToByte(startBrightness)
@@ -148,7 +148,7 @@ class LedTimer:
     def setModeSunset(
         self, startBrightness: int, endBrightness: int, duration: int
     ) -> None:
-        self.mode = "sunrise"
+        self.mode = BuiltInTimer.valtostr(BuiltInTimer.sunset)
         self.turn_on = True
         self.pattern_code = BuiltInTimer.sunset
         self.brightness_start = utils.percentToByte(startBrightness)
@@ -247,7 +247,7 @@ class LedTimer:
             self.mode = "unknown"
 
         self.warmth_level = bytes[12]
-        if self.warmth_level != 0:
+        if self.warmth_level != 0 and self.pattern_code == 0x61:
             self.mode = "ww"
 
         if len(bytes) == 15:  # 9 byte protocol
@@ -283,7 +283,7 @@ class LedTimer:
         bytes[7] = self.repeat_mask
 
         if self.length == 12:
-            bytes[8] == 0x23 if self.turn_on else 0x24
+            bytes[8] = 0x23 if self.turn_on else 0x24
             return bytes
 
         on_byte_num = 14 if self.length == 15 else 13
