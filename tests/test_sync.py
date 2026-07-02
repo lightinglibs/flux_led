@@ -20,6 +20,8 @@ from flux_led.const import (
     STATE_WARM_WHITE,
     TRANSITION_GRADUAL,
     MultiColorEffects,
+    ScribbleEffect,
+    ScribbleLED,
 )
 from flux_led.pattern import PresetPattern
 from flux_led.protocol import (
@@ -1483,6 +1485,212 @@ class TestLight(unittest.TestCase):
         mock_read.side_effect = read_data
         with self.assertRaisesRegex(Exception, "Cannot determine protocol"):
             flux_led.WifiLedBulb("192.168.1.199")
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setExtendedCustomEffect(self, mock_connect, mock_read, mock_send):
+        """Test sync setExtendedCustomEffect for 0xB6 device."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+
+        # Call setExtendedCustomEffect
+        light.setExtendedCustomEffect(
+            pattern_id=1,
+            colors=[(255, 0, 0), (0, 255, 0)],
+            speed=50,
+            density=50,
+        )
+
+        # Verify _send_msg was called
+        assert mock_send.called
+        sent_data = mock_send.call_args[0][0]
+        # Verify it's a wrapped message
+        assert sent_data[0] == 0xB0
+        assert sent_data[1] == 0xB1
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setCustomSegmentColors(self, mock_connect, mock_read, mock_send):
+        """Test sync setCustomSegmentColors for 0xB6 device."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+
+        # Call setCustomSegmentColors
+        light.setCustomSegmentColors(segments=[(255, 0, 0), None, (0, 0, 255)])
+
+        # Verify _send_msg was called
+        assert mock_send.called
+        sent_data = mock_send.call_args[0][0]
+        # Verify it's a wrapped message
+        assert sent_data[0] == 0xB0
+        assert sent_data[1] == 0xB1
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setScribble(self, mock_connect, mock_read, mock_send):
+        """Test sync setScribble runs the E1 23 init + E1 26 paint loop."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+
+        # Ignore any sends performed during setup / state query.
+        mock_send.reset_mock()
+
+        # Two color groups so the paint loop emits more than one E1 26 message.
+        num_leds = light.led_count
+        half = num_leds // 2
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * half + [
+            ScribbleLED(rgb=(0, 0, 255))
+        ] * (num_leds - half)
+
+        light.setScribble(leds, effect=ScribbleEffect.STATIC)
+
+        # enter_mode init (E1 23) + one E1 26 paint per color group = 3 sends,
+        # all B0 B1 wrapped, confirming the sync multi-message loop runs.
+        assert mock_send.call_count == 3
+        sent = [call.args[0] for call in mock_send.call_args_list]
+        for msg in sent:
+            assert msg[0] == 0xB0
+            assert msg[1] == 0xB1
+        # First send is the scribble-mode init (E1 23); the rest are paints (E1 26).
+        assert self._inner_of(sent[0])[:2] == b"\xe1\x23"
+        assert self._inner_of(sent[1])[:2] == b"\xe1\x26"
+        assert self._inner_of(sent[2])[:2] == b"\xe1\x26"
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setScribble_raw_int_direction(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """setScribble accepts a raw int direction, not just the enum."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+        mock_send.reset_mock()
+
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * light.led_count
+        # A raw int direction (0x02) must not raise AttributeError on
+        # direction.value and must carry through as the wire direction byte.
+        light.setScribble(leds, direction=0x02, enter_mode=False)
+
+        assert mock_send.call_count == 1
+        paint = self._inner_of(mock_send.call_args_list[0].args[0])
+        assert paint[:2] == b"\xe1\x26"
+        assert paint[3] == 0x02  # direction byte
+
+    @staticmethod
+    def _inner_of(wrapped: bytearray) -> bytes:
+        """Extract the inner message from a B0B1B2B3-wrapped result."""
+        inner_len = (wrapped[8] << 8) | wrapped[9]
+        return bytes(wrapped[10 : 10 + inner_len])
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_methods_raise_on_unsupported_device(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """Sync extended-custom methods raise ValueError on a non-0xB6 device."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\x81\x35")
+            if calls == 2:
+                self.assertEqual(expected, 12)
+                return bytearray(b"\x23\x61\x05\x10\xb6\x00\x98\x00\x09\x00\xf0\x96")
+            if calls == 3:
+                self.assertEqual(expected, 14)
+                return bytearray(
+                    b"\x81\x35\x23\x61\x05\x10\xb6\x00\x98\x19\x09\x25\x0f\xf3"
+                )
+            if calls == 4:
+                self.assertEqual(expected, 14)
+                return bytearray(
+                    b"\x81\x35\x23\x38\x05\x10\xb6\x00\x98\x19\x09\x25\x0f\xca"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+        # Standard RGBCW bulb -- does not use the extended custom protocol.
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_9BYTE_DIMMABLE_EFFECTS)
+        assert not light.supports_extended_custom_effects
+        assert not light.supports_scribble
+
+        with self.assertRaises(ValueError):
+            light.setExtendedCustomEffect(pattern_id=1, colors=[(255, 0, 0)])
+        with self.assertRaises(ValueError):
+            light.setCustomSegmentColors(segments=[(255, 0, 0)])
+        with self.assertRaises(ValueError):
+            light.setScribble([ScribbleLED(rgb=(255, 0, 0))])
 
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")

@@ -7,6 +7,7 @@ import contextlib
 import datetime
 import logging
 from abc import abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from typing import NamedTuple
@@ -1679,6 +1680,311 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         if not self.is_valid_extended_state_response(raw_state):
             return None
         return raw_state[LEDENET_EXTENDED_STATE_LED_COUNT_POS]
+
+    def _rgb_to_hsv_bytes_rgbw(
+        self, r: int, g: int, b: int, white: int = 0
+    ) -> list[int]:
+        """Convert RGBW (0-255) to 5-byte HSVW format for extended effect commands.
+
+        Output format:
+          [H/2, S, V, 0x00, W]
+           0    1  2   3    4
+           |    |  |   |    white LED brightness (0-255)
+           |    |  |   unused (always 0x00)
+           |    |  value/brightness (0-100)
+           |    saturation (0-100)
+           hue divided by 2 (0-180)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+            white: White LED brightness (0-255)
+
+        Returns:
+            5-byte list [H/2, S, V, 0x00, W]
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, white]
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode | int,
+    ) -> list[bytearray]:
+        """Construct a level change using a uniform 0xE1 0x22 fill command.
+
+        Sending a solid color via the 0xE1 0x21 STATIC_FILL pattern puts the
+        device into a "Scene" state (preset_pattern=0x25, mode=0x66), so a
+        plain color-set reports back as the effect "Static Fill". The vendor
+        app instead sets a solid color with a UNIFORM 0xE1 0x22 command (all
+        20 segments identical), which lands the device in preset_pattern=0x24
+        ("Colorful" = a plain color) and reports effect=None with the correct
+        rgb/brightness. This is hardware-verified on the 0xB6 device.
+
+        Inner message format (before wrapping):
+          pos  0  1  2  3  4  5  6  [ 5-byte segment ] x 20
+              E1 22 00 00 00 00 14  [ H/2 S V 00 WW ]
+                                 |  each of the 20 identical segments:
+                                 |    color: [H/2, S, V, 0x00, 0x00]
+                                 |    white: [0x00, 0x64, 0x00, 0x00, W]
+                                 segment count (0x14 = 20)
+
+        The device is single-white RGB and the app sends EITHER a color OR a
+        white, never both. Warm and cool white are combined into a single
+        white level.
+        """
+        # The device has a single white LED. The caller (_generate_levels_change)
+        # mirrors a single white value into BOTH warm and cool for non-CCT
+        # devices, so take the max (not the sum) to avoid double-counting it.
+        w = max(warm_white or 0, cool_white or 0)
+
+        if w > 0 and not (red or green or blue):
+            # WHITE: scale 0-255 white to the device's 0-100 white level.
+            # S byte MUST be 0x64 (100); with S=0 the device silently ignores
+            # the frame (hardware-verified).
+            white_level = max(0, min(100, round(w * 100 / 255)))
+            segment = [0x00, 0x64, 0x00, 0x00, white_level]
+        else:
+            # COLOR: [H/2, S, V, 0x00, 0x00]
+            segment = self._rgb_to_hsv_bytes((red or 0), (green or 0), (blue or 0))
+
+        # Uniform E1 22 fill: header + segment repeated for all 20 segments
+        inner = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+        for _ in range(20):
+            inner.extend(segment)
+
+        return [
+            self.construct_wrapped_message(
+                inner, inner_pre_constructed=True, version=0x02
+            )
+        ]
+
+    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
+        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
+
+        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+
+        Equivalent to the RGBW variant with white=0, which yields the same
+        [H/2, S, V, 0x00, 0x00] layout, so delegate to avoid duplicating the
+        conversion logic.
+        """
+        return self._rgb_to_hsv_bytes_rgbw(r, g, b, 0)
+
+    def construct_extended_custom_effect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+    ) -> bytearray:
+        """Construct an extended custom effect command.
+
+        Protocol format:
+          0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 ...
+         e1 21 01 64 PP OO DD NS SP 00 00 00 00 00 00 CC [H S V 00 00] x N
+                    |  |  |  |  |                    |  colors (5 bytes each)
+                    |  |  |  |  |                    color count
+                    |  |  |  |  speed (0-100)
+                    |  |  |  density (0-100)
+                    |  |  direction (01=L->R, 02=R->L)
+                    |  option (00=default, 01=color change)
+                    pattern_id (1-22 or 101-102)
+
+        Args:
+            pattern_id: Pattern ID 1-22 or 101-102
+            colors: List of 1-8 RGB color tuples (0-255 per channel)
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: 0x01=L->R, 0x02=R->L (default L->R)
+            option: Pattern-specific option (default 0)
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Clamp values to valid range
+        speed = max(0, min(100, speed))
+        density = max(0, min(100, density))
+
+        # Convert Enum to value if needed
+        if hasattr(pattern_id, "value"):
+            pattern_id = pattern_id.value
+        if hasattr(option, "value"):
+            option = option.value
+        if hasattr(direction, "value"):
+            direction = direction.value
+
+        # Build inner message
+        msg = bytearray(
+            [
+                0xE1,
+                0x21,
+                0x01,  # Command type
+                0x64,  # Constant (100)
+                pattern_id,
+                option,
+                direction,
+                density,
+                speed,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x00,  # Reserved (6 bytes)
+                len(colors),  # Color count
+            ]
+        )
+
+        # Add colors as HSV (5 bytes each)
+        for r, g, b in colors:
+            msg.extend(self._rgb_to_hsv_bytes(r, g, b))
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Construct a custom segment colors command (0xE1 0x22).
+
+        Sets static HSV colors for each of 20 segments on the light strip.
+        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
+
+        Protocol format:
+          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
+
+        Args:
+            segments: List of up to 20 segment colors. Each segment is either:
+                - None or (0, 0, 0) for off
+                - (R, G, B) tuple with values 0-255
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Build inner message: header + 20 segments
+        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+
+        for i in range(20):
+            segment = segments[i] if i < len(segments) else None
+            if segment and segment != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segment))
+            else:
+                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    @staticmethod
+    def _scribble_bitmap(led_indices: Iterable[int], num_leds: int) -> bytearray:
+        """Build a ceil(num_leds/8)-byte MSB-first bitmap.
+
+        LED i -> byte i//8, bit 7-(i%8). Bit set = 'apply this command to LED i'.
+        Trailing pad bits in the last byte are 0 (e.g. N=100 -> 13 bytes, last
+        byte 0xf0; N=80 -> 10 bytes, no pad).
+        """
+        nbytes = (num_leds + 7) // 8
+        bitmap = bytearray(nbytes)
+        for i in led_indices:
+            if not 0 <= i < num_leds:
+                raise ValueError(f"LED index {i} out of range for {num_leds} LEDs")
+            bitmap[i // 8] |= 0x80 >> (i % 8)
+        return bitmap
+
+    def construct_scribble_init(self, num_leds: int) -> bytearray:
+        """Construct a scribble-mode init command (0xE1 0x23, non-rendering).
+
+        Verified on hardware: E1 23 does NOT render -- it is only a
+        non-rendering buffer / scribble-mode-init (it flips state preset to
+        0x66). Its per-LED color fields are vestigial for driving the display,
+        so this emits all-zero records. All colors render through grouped
+        E1 26 paints (see construct_scribble_paint).
+
+        Inner byte layout:
+          e1 23 | 01 00 01 50 64 00 | N | <N x 7-byte all-zero records>
+           0  1    2  3  4  5  6  7   8    9 ...
+
+        Each 7-byte record is [H/2, S, V, pad, pad, WW, bright] = all-zero
+        color/white with brightness byte 0x64 (100). inner_len = 9 + 7*N.
+        """
+        msg = bytearray([0xE1, 0x23, 0x01, 0x00, 0x01, 0x50, 0x64, 0x00, num_leds])
+        msg.extend(bytes.fromhex("00000000000064") * num_leds)
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
+    def construct_scribble_paint(
+        self,
+        effect: int = 0x00,
+        direction: int = 0x01,
+        density: int = 0x50,
+        speed: int = 0x64,
+        blink_mode: int = 0x00,
+        h2: int = 0x00,
+        s: int = 0x00,
+        v: int = 0x00,
+        white: int = 0x00,
+        blink_speed: int = 0x64,
+        bitmap_leds: Iterable[int] | None = None,
+        num_leds: int = 0,
+    ) -> bytearray:
+        """Construct a scribble paint command (0xE1 0x26, the render path).
+
+        Sets and displays per-LED color / white / blink / global-effect onto
+        the subset of LEDs selected by a bitmap.
+
+        Inner byte layout:
+          e1 26 | EFFECT | DIR | DENSITY | SPEED | BLINK | H/2 | S | V | 00 | WLVL | BLINKSPD | <bitmap>
+           0  1     2       3      4         5       6      7    8   9   10    11       12        13 ...
+
+        13-byte header then ceil(num_leds/8)-byte bitmap. If bitmap_leds is
+        None, all LEDs (0..num_leds-1) are selected.
+
+        Color vs white are mutually exclusive (caller's responsibility):
+        color mode -> v set, white=0; white mode -> white set, v=0.
+
+        All arguments are plain ints; enum->value conversion is done in the
+        generate/API layer where the type is a known enum (mypy-clean).
+        """
+        density = max(0, min(100, density))
+        speed = max(0, min(100, speed))
+        blink_speed = max(0, min(100, blink_speed))
+        s = max(0, min(100, s))
+        v = max(0, min(100, v))
+        white = max(0, min(100, white))
+        h2 = max(0, min(180, h2))
+        msg = bytearray(
+            [
+                0xE1,
+                0x26,
+                effect,
+                direction,
+                density,
+                speed,
+                blink_mode,
+                h2,
+                s,
+                v,
+                0x00,
+                white,
+                blink_speed,
+            ]
+        )
+        indices = range(num_leds) if bitmap_leds is None else bitmap_leds
+        msg.extend(self._scribble_bitmap(indices, num_leds))
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
 
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):

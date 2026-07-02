@@ -22,6 +22,9 @@ from .const import (
     STATE_GREEN,
     STATE_RED,
     STATE_WARM_WHITE,
+    ExtendedCustomEffectDirection,
+    ScribbleEffect,
+    ScribbleLED,
 )
 from .scanner import FluxLEDDiscovery
 from .sock import _socket_retry
@@ -390,6 +393,104 @@ class WifiLedBulb(LEDENETDevice):
             0,
             retry=retry,
         )
+
+    def setExtendedCustomEffect(
+        self,
+        pattern_id: int,
+        colors: list[tuple[int, int, int]],
+        speed: int = 50,
+        density: int = 50,
+        direction: int = 0x01,
+        option: int = 0x00,
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set an extended custom effect on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            pattern_id: Pattern ID (1-22 or 101-102). See ExtendedCustomEffectPattern.
+            colors: List of 1-8 RGB color tuples, e.g., [(255, 0, 0), (0, 255, 0)]
+            speed: Animation speed 0-100 (default 50)
+            density: Pattern density 0-100 (default 50)
+            direction: Animation direction. See ExtendedCustomEffectDirection.
+                0x01 = Left to Right (default)
+                0x02 = Right to Left
+            option: Pattern-specific option (default 0)
+            retry: Number of retries on failure
+        """
+        if not self.supports_extended_custom_effects:
+            raise ValueError("device does not support extended custom effects")
+        self._send_and_read_with_retry(
+            self._generate_extended_custom_effect(
+                pattern_id, colors, speed, density, direction, option
+            ),
+            0,
+            retry=retry,
+        )
+
+    def setCustomSegmentColors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set custom colors for each segment on the device.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        Sets static HSV colors for each of 20 segments on the light strip.
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+            retry: Number of retries on failure
+        """
+        if not self.supports_extended_custom_effects:
+            raise ValueError("device does not support extended custom effects")
+        self._send_and_read_with_retry(
+            self._generate_custom_segment_colors(segments),
+            0,
+            retry=retry,
+        )
+
+    def setScribble(
+        self,
+        leds: list[ScribbleLED],
+        effect: ScribbleEffect | int = ScribbleEffect.STATIC,
+        direction: ExtendedCustomEffectDirection | int = (
+            ExtendedCustomEffectDirection.LEFT_TO_RIGHT
+        ),
+        density: int = 80,
+        speed: int = 100,
+        enter_mode: bool = True,
+        retry: int = DEFAULT_RETRIES,
+    ) -> None:
+        """Set a per-LED ('scribble') configuration on a 0xB6 device.
+
+        Renders every LED via grouped E1 26 paints (one per color/blink group),
+        covering all N LEDs including an (0,0,0) group for off bulbs. Per-LED
+        blink/color come from each ScribbleLED. ``effect`` is a ScribbleEffect or
+        a raw int id 0x00-0x08 (ids 3,4,6,7 are valid effects with no UI name).
+        When enter_mode is True, first sends one all-zero E1 23 to guarantee
+        scribble-mode entry. E1 23 does NOT render -- all colors render through
+        E1 26 (verified on hardware).
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+        """
+        if not self.supports_scribble:
+            raise ValueError("device does not support scribble")
+        num_leds = self.led_count if self.led_count is not None else len(leds)
+        direction_val = (
+            direction.value
+            if isinstance(direction, ExtendedCustomEffectDirection)
+            else int(direction)
+        )
+        if enter_mode:
+            self._send_and_read_with_retry(
+                self._generate_scribble_init(num_leds), 0, retry=retry
+            )
+        for msg in self._scribble_paint_groups(
+            leds, effect, direction_val, density, speed, num_leds
+        ):
+            self._send_and_read_with_retry(msg, 0, retry=retry)
 
     def refreshState(self) -> None:
         return self.update_state()

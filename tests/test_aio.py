@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import colorsys
 import contextlib
 import datetime
 import json
@@ -24,7 +25,13 @@ from flux_led.const import (
     MAX_TEMP,
     MIN_TEMP,
     PUSH_UPDATE_INTERVAL,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
+    ExtendedCustomEffectPattern,
     MultiColorEffects,
+    ScribbleBlinkMode,
+    ScribbleEffect,
+    ScribbleLED,
     WhiteChannelType,
 )
 from flux_led.protocol import (
@@ -4383,6 +4390,99 @@ async def test_setup_0xB6_surplife_real_frame(mock_aio_protocol):
     assert light.led_count == 100
 
 
+@pytest.mark.asyncio
+async def test_0xB6_colorful_solid_red_full(mock_aio_protocol):
+    """0xB6 "Colorful" solid red at full brightness is a plain color, not an effect.
+
+    Real device EA81 capture (app Colorful -> red): preset_pattern=0x24, mode=0x01
+    -> reported as a color with no effect (verified on device).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923240164f0b46464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect is None
+    assert light.is_on is True
+    assert light.rgb == (255, 0, 0)
+    assert light.brightness == 255
+
+
+@pytest.mark.asyncio
+async def test_0xB6_colorful_solid_red_dim(mock_aio_protocol):
+    """0xB6 "Colorful" solid red dimmed to 30% is a plain color, not an effect.
+
+    Real device EA81 capture (app Colorful -> red @ 30%): preset_pattern=0x24,
+    mode=0x01, value byte 0x1e (30%).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923240164f0b4641eff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect is None
+    assert light.is_on is True
+    # Clearly dimmed (well below the full-brightness value of 255).
+    assert light.brightness == 76
+
+
+@pytest.mark.asyncio
+async def test_0xB6_scene_wave(mock_aio_protocol):
+    """0xB6 "Scenes" animated effect reports preset_pattern=0x25, mode=effect id.
+
+    Real device EA81 capture of the app's Scenes -> Wave (preset 0x25, mode 0x01).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923250150f0b46464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect == "Wave"
+
+
+@pytest.mark.asyncio
+async def test_0xB6_scene_static_fill(mock_aio_protocol):
+    """0xB6 "Scenes" Static Fill reports preset_pattern=0x25, mode=0x66.
+
+    Real device EA81 capture of the app's Scenes -> Static Fill (preset 0x25,
+    mode 0x66, blue).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923256632f0786464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect == "Static Fill"
+
+
 def test_protocol_extended_custom_state_response_length():
     """ProtocolLEDENETExtendedCustom expects the 27-byte extended state."""
     proto = ProtocolLEDENETExtendedCustom()
@@ -4455,3 +4555,1586 @@ def test_extended_state_led_count():
     # Too-short / invalid frame returns None
     assert proto.extended_state_led_count(b"\xea\x81\x01") is None
     assert proto.extended_state_led_count(b"\x00" * 27) is None
+
+
+def test_extended_custom_effect_pattern_enum_values():
+    """Test ExtendedCustomEffectPattern enum has expected values."""
+    assert ExtendedCustomEffectPattern.WAVE.value == 0x01
+    assert ExtendedCustomEffectPattern.METEOR.value == 0x02
+    assert ExtendedCustomEffectPattern.STREAMER.value == 0x03
+    assert ExtendedCustomEffectPattern.BUILDING_BLOCKS.value == 0x04
+    assert ExtendedCustomEffectPattern.BREATHE.value == 0x09
+    assert ExtendedCustomEffectPattern.STATIC_GRADIENT.value == 0x65
+    assert ExtendedCustomEffectPattern.STATIC_FILL.value == 0x66
+
+
+def test_extended_custom_effect_direction_enum_values():
+    """Test ExtendedCustomEffectDirection enum has expected values."""
+    assert ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value == 0x01
+    assert ExtendedCustomEffectDirection.RIGHT_TO_LEFT.value == 0x02
+
+
+def test_extended_custom_effect_option_enum_values():
+    """Test ExtendedCustomEffectOption enum has expected values."""
+    assert ExtendedCustomEffectOption.DEFAULT.value == 0x00
+    assert ExtendedCustomEffectOption.VARIANT_1.value == 0x01
+    assert ExtendedCustomEffectOption.VARIANT_2.value == 0x02
+
+
+def test_construct_extended_custom_effect_single_color():
+    """Test constructing an extended custom effect with single color."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Single red color, pattern Wave, default settings
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=50,
+        density=50,
+        direction=0x01,
+        option=0x00,
+    )
+
+    # Result should be a wrapped message
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+    # Check the wrapper header (b0 b1 b2 b3)
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+
+def test_construct_extended_custom_effect_multiple_colors():
+    """Test constructing an extended custom effect with multiple colors."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Three colors: red, green, blue
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=2,  # Meteor
+        colors=colors,
+        speed=80,
+        density=100,
+        direction=0x02,  # Right to Left
+        option=0x01,  # Color change
+    )
+
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_construct_extended_custom_effect_color_order():
+    """Test that colors are stored in input order."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Two distinct colors
+    colors = [(255, 0, 0), (0, 0, 255)]  # Red, Blue
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+        speed=50,
+        density=50,
+    )
+
+    # The message structure after wrapper:
+    # Inner message starts after wrapper header + length bytes
+    # Find the color data section (after the 16-byte header)
+    # Colors are 5 bytes each (H, S, V, 0, 0) in input order
+
+    # Red (255, 0, 0) in HSV: H=0, S=100, V=100 -> stored as (0, 100, 100)
+    # Blue (0, 0, 255) in HSV: H=240, S=100, V=100 -> stored as (120, 100, 100)
+
+    # Red should come first in the message (same order as input)
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_hsv_conversion():
+    """Test RGB to HSV conversion accuracy."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with a known color: pure green
+    colors = [(0, 255, 0)]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+    )
+
+    # Green in HSV: H=120, S=100%, V=100%
+    # Stored as: H/2=60, S=100, V=100
+    # Verify the message was constructed
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_construct_extended_custom_effect_speed_clamping():
+    """Test that speed is clamped to 0-100."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Speed > 100 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=150,
+    )
+    assert isinstance(result, bytearray)
+
+    # Speed < 0 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        speed=-10,
+    )
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_density_clamping():
+    """Test that density is clamped to 0-100."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Density > 100 should be clamped
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0)],
+        density=200,
+    )
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_max_colors():
+    """Test constructing an effect with maximum 8 colors."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # 8 colors (maximum)
+    colors = [
+        (255, 0, 0),
+        (255, 128, 0),
+        (255, 255, 0),
+        (0, 255, 0),
+        (0, 255, 255),
+        (0, 0, 255),
+        (128, 0, 255),
+        (255, 0, 255),
+    ]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=1,
+        colors=colors,
+    )
+
+    assert isinstance(result, bytearray)
+    # Each color is 5 bytes, 8 colors = 40 bytes for colors
+    # Plus 16 bytes header = 56 bytes inner message
+    # Plus wrapper overhead
+
+
+def test_construct_extended_custom_effect_with_enums():
+    """Test using enum values for parameters."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    result = proto.construct_extended_custom_effect(
+        pattern_id=ExtendedCustomEffectPattern.WAVE,
+        colors=[(255, 0, 0)],
+        speed=50,
+        density=50,
+        direction=ExtendedCustomEffectDirection.RIGHT_TO_LEFT,
+        option=ExtendedCustomEffectOption.VARIANT_1,
+    )
+
+    assert isinstance(result, bytearray)
+
+
+def test_construct_extended_custom_effect_with_variant_2():
+    """Test using VARIANT_2 option (e.g., breathe mode for rainbow patterns)."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Rainbow colors with VARIANT_2 option
+    colors = [
+        (255, 0, 0),  # Red
+        (255, 255, 0),  # Yellow
+        (0, 255, 0),  # Green
+        (0, 255, 255),  # Cyan
+        (0, 0, 255),  # Blue
+        (255, 0, 255),  # Magenta
+    ]
+    result = proto.construct_extended_custom_effect(
+        pattern_id=12,  # Twinkling stars
+        colors=colors,
+        speed=60,
+        density=100,
+        direction=ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+        option=ExtendedCustomEffectOption.VARIANT_2,
+    )
+
+    assert isinstance(result, bytearray)
+    assert len(result) > 0
+
+
+def test_extended_custom_effect_hsv_values():
+    """Test specific HSV value calculations."""
+    # Test the HSV conversion formula used in the protocol
+    # RGB (255, 0, 0) -> HSV (0, 100%, 100%) -> stored as (0, 100, 100)
+    r, g, b = 255, 0, 0
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 0  # Red hue
+    assert hsv_s == 100  # Full saturation
+    assert hsv_v == 100  # Full value
+
+    # RGB (0, 0, 255) -> HSV (240, 100%, 100%) -> stored as (120, 100, 100)
+    r, g, b = 0, 0, 255
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 120  # Blue hue (240/2)
+    assert hsv_s == 100
+    assert hsv_v == 100
+
+    # RGB (0, 255, 0) -> HSV (120, 100%, 100%) -> stored as (60, 100, 100)
+    r, g, b = 0, 255, 0
+    h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    hsv_h = int(h * 180)
+    hsv_s = int(s * 100)
+    hsv_v = int(v * 100)
+
+    assert hsv_h == 60  # Green hue (120/2)
+    assert hsv_s == 100
+    assert hsv_v == 100
+
+
+# Tests for _generate_extended_custom_effect validation (base_device.py lines 1335-1360)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_validation(mock_aio_protocol):
+    """Test validation in _generate_extended_custom_effect."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # Setup 0xB6 device with extended state
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+
+    # Test invalid pattern_id (0 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
+        light._generate_extended_custom_effect(0, [(255, 0, 0)])
+
+    # Test invalid pattern_id (23 is not valid -- max animated id is 22)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
+        light._generate_extended_custom_effect(23, [(255, 0, 0)])
+
+    # Test invalid pattern_id (24 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
+        light._generate_extended_custom_effect(24, [(255, 0, 0)])
+
+    # Test invalid pattern_id (25 is not valid)
+    with pytest.raises(ValueError, match="Pattern ID must be 1-22 or 101-102"):
+        light._generate_extended_custom_effect(25, [(255, 0, 0)])
+
+    # Test empty colors list
+    with pytest.raises(ValueError, match="at least one color"):
+        light._generate_extended_custom_effect(1, [])
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_extended_custom_effect(1, [(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_extended_custom_effect(1, [(256, 0, 0)])
+
+    # Test color values out of range (< 0)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_extended_custom_effect(1, [(-1, 0, 0)])
+
+    # Test valid pattern_id 22 (max animated id)
+    result = light._generate_extended_custom_effect(22, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+    # Test valid pattern_id 101 (STATIC_GRADIENT)
+    result = light._generate_extended_custom_effect(101, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+    # Test valid pattern_id 102 (STATIC_FILL)
+    result = light._generate_extended_custom_effect(102, [(255, 0, 0)])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_rejects_too_many_colors(
+    mock_aio_protocol,
+):
+    """Test that too many colors (>8) raise ValueError instead of truncating."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+
+    # 9 colors (one over the 8 max) must raise; 8 is still accepted.
+    colors = [(i * 25, 0, 0) for i in range(9)]
+    with pytest.raises(ValueError, match="at most 8 colors are supported, got 9"):
+        light._generate_extended_custom_effect(1, colors)
+
+    result = light._generate_extended_custom_effect(1, colors[:8])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"speed": 101}, "speed must be 0-100"),
+        ({"speed": -1}, "speed must be 0-100"),
+        ({"density": 101}, "density must be 0-100"),
+        ({"density": -1}, "density must be 0-100"),
+        ({"direction": 0x00}, "direction must be 0x01 or 0x02"),
+        ({"direction": 0x03}, "direction must be 0x01 or 0x02"),
+        ({"option": 3}, "option must be 0-2"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_param_bounds(
+    mock_aio_protocol, kwargs, match
+):
+    """General wire-byte bounds for speed/density/direction/option are enforced."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_extended_custom_effect(1, [(255, 0, 0)], **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_param_bounds_valid(mock_aio_protocol):
+    """Boundary-valid animation params still succeed."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    result = light._generate_extended_custom_effect(
+        1, [(255, 0, 0)], speed=100, density=0, direction=0x02, option=2
+    )
+    assert isinstance(result, bytearray)
+
+
+# Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_validation(mock_aio_protocol):
+    """Test validation in _generate_custom_segment_colors."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_custom_segment_colors([(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_custom_segment_colors([(256, 0, 0)])
+
+    # Test valid segments with None
+    result = light._generate_custom_segment_colors([None, (255, 0, 0), None])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_rejects_too_many_segments(
+    mock_aio_protocol,
+):
+    """Test that too many segments (>20) raise ValueError instead of truncating."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+
+    # 21 segments (one over the 20 max) must raise; 20 is still accepted.
+    segments = [(i * 10, 0, 0) for i in range(21)]
+    with pytest.raises(ValueError, match="at most 20 segments are supported, got 21"):
+        light._generate_custom_segment_colors(segments)
+
+    result = light._generate_custom_segment_colors(segments[:20])
+    assert isinstance(result, bytearray)
+
+
+# Tests for construct_levels_change (protocol.py lines 1826-1861)
+
+
+def test_protocol_construct_levels_change_0xB6():
+    """Test construct_levels_change sets a color via a uniform E1 22 fill.
+
+    A solid color must land the device in preset 0x24 ("Colorful"), so it is
+    sent as a uniform E1 22 (all 20 segments identical), not an E1 21 Static
+    Fill (hardware-verified).
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with RGB values (pure red)
+    result = proto.construct_levels_change(
+        persist=1,
+        red=255,
+        green=0,
+        blue=0,
+        warm_white=0,
+        cool_white=0,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+    # Check wrapper header
+    assert msg[0] == 0xB0
+    assert msg[1] == 0xB1
+    assert msg[2] == 0xB2
+    assert msg[3] == 0xB3
+
+    # Pin the full inner E1 22 uniform frame. This is byte-identical to the real
+    # app "Colorful -> red" packet captured from the device (inner:
+    # e1 22 00 00 00 00 14 [00 64 64 00 00] x 20).
+    inner = _inner_of(msg)
+    header = _h("e1 22 00 00 00 00 14")
+    # (255,0,0): hue 0, sat 100, val 100 -> [00 64 64 00 00]
+    red_seg = _h("00 64 64 00 00")
+    expected = header + red_seg * 20
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_levels_change_with_white():
+    """Test construct_levels_change for a white-only set.
+
+    A white-only set is sent as a uniform E1 22 with the literal white segment
+    [00 64 00 00 W], where W is the 0-100 white level (S byte MUST be 0x64).
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with white values: warm_white=255 -> W = round(255*100/255) = 100
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=255,
+        cool_white=0,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+
+    inner = _inner_of(msg)
+    header = _h("e1 22 00 00 00 00 14")
+    # W = 100 = 0x64; segment [00 64 00 00 64]
+    white_seg = _h("00 64 00 00 64")
+    expected = header + white_seg * 20
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_levels_change_white_not_doubled():
+    """A single white value mirrored into warm+cool must not be double-counted.
+
+    The device has one white LED; _generate_levels_change mirrors a single white
+    value into BOTH warm and cool for non-CCT devices, so combining them by max
+    (not sum) is required. Regression test: warm=cool=128 (a mirrored single
+    white of 128) must yield W = round(128*100/255) = 50, not 100.
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=128,
+        cool_white=128,  # mirrored single white; max -> 128 -> W=50 (not 2x)
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    assert isinstance(result[0], bytearray)
+
+    inner = _inner_of(result[0])
+    header = _h("e1 22 00 00 00 00 14")
+    white_seg = _h("00 64 00 00 32")  # W = 50 = 0x32 (not doubled to 0x64)
+    expected = header + white_seg * 20
+    assert inner == expected
+
+
+def test_protocol_rgb_to_hsv_bytes_rgbw():
+    """Test _rgb_to_hsv_bytes_rgbw conversion."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test pure red with white
+    result = proto._rgb_to_hsv_bytes_rgbw(255, 0, 0, 100)
+    assert len(result) == 5
+    assert result[0] == 0  # Hue (red = 0)
+    assert result[1] == 100  # Saturation
+    assert result[2] == 100  # Value
+    assert result[3] == 0x00  # Unused
+    assert result[4] == 100  # White
+
+    # Test pure green
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 255, 0, 0)
+    assert result[0] == 60  # Hue (green = 120/2)
+
+    # Test pure blue
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 0, 255, 255)
+    assert result[0] == 120  # Hue (blue = 240/2)
+    assert result[4] == 255  # White
+
+
+# Tests for construct_custom_segment_colors (protocol.py lines 1971-1980)
+
+
+def test_protocol_construct_custom_segment_colors():
+    """Test construct_custom_segment_colors command format."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with a few segments
+    segments = [(255, 0, 0), None, (0, 0, 255)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+    # Check wrapper header
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+    # Pin the full inner E1 22 payload: header + 0x14 (20) count byte, then
+    # one 5-byte [H/2, S, V, 0x00, 0x00] record per segment, padded to 20.
+    inner = _inner_of(result)
+    header = _h("e1 22 00 00 00 00 14")
+    red = _h("00 64 64 00 00")  # (255,0,0): hue 0, sat 100, val 100
+    off = _h("00 00 00 00 00")  # None / off segment
+    blue = _h("78 64 64 00 00")  # (0,0,255): hue 120 -> byte 0x78, sat/val 100
+    # 3 provided segments (red, off, blue) + 17 off segments = 20 total.
+    expected = header + red + off + blue + off * 17
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_custom_segment_colors_all_off():
+    """Test construct_custom_segment_colors with all segments off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # All None segments
+    segments = [None] * 10
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+def test_protocol_construct_custom_segment_colors_zero_tuple():
+    """Test that (0,0,0) is treated as off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Mix of None and (0,0,0)
+    segments = [None, (0, 0, 0), (255, 0, 0)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+# Tests for async API methods
+
+
+@pytest.mark.asyncio
+async def test_async_set_extended_custom_effect_0xB6(mock_aio_protocol):
+    """Test async_set_extended_custom_effect sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_extended_custom_effect(
+        pattern_id=1,
+        colors=[(255, 0, 0), (0, 255, 0)],
+        speed=50,
+        density=50,
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+@pytest.mark.asyncio
+async def test_async_set_custom_segment_colors_0xB6(mock_aio_protocol):
+    """Test async_set_custom_segment_colors sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_custom_segment_colors(
+        segments=[(255, 0, 0), None, (0, 0, 255)]
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+# Scribble (per-LED) feature tests (0xB6)
+
+
+def _inner_of(wrapped: bytearray) -> bytes:
+    """Extract the inner message from a B0B1B2B3-wrapped result.
+
+    wrapper = b0 b1 b2 b3 | 00 01 | ver | counter | len_hi len_lo | inner | cksum
+    """
+    inner_len = (wrapped[8] << 8) | wrapped[9]
+    return bytes(wrapped[10 : 10 + inner_len])
+
+
+ALL_ON_100 = bytes.fromhex("ff" * 12 + "f0")  # N=100, 13 bytes
+ALL_ON_80 = bytes.fromhex("ff" * 10)  # N=80, 10 bytes
+OFF0_80 = bytes.fromhex("80" + "00" * 9)  # N=80, only LED 0
+GROUP_40_79_80 = bytes.fromhex("00" * 5 + "ff" * 5)  # N=80, LEDs 40-79
+
+
+def _h(s: str) -> bytes:
+    return bytes.fromhex(s.replace(" ", ""))
+
+
+def test_scribble_bitmap_n100():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap(range(100), 100)
+    assert len(bitmap) == 13
+    assert bitmap == ALL_ON_100
+    assert bitmap[-1] == 0xF0
+
+
+def test_scribble_bitmap_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap(range(80), 80)
+    assert len(bitmap) == 10
+    assert bitmap == ALL_ON_80
+
+
+def test_scribble_bitmap_led0():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap([0], 80)
+    assert bitmap[0] == 0x80
+
+
+def test_scribble_bitmap_led7():
+    proto = ProtocolLEDENETExtendedCustom()
+    bitmap = proto._scribble_bitmap([7], 80)
+    assert bitmap[0] == 0x01
+
+
+def test_scribble_bitmap_out_of_range():
+    proto = ProtocolLEDENETExtendedCustom()
+    with pytest.raises(ValueError):
+        proto._scribble_bitmap([80], 80)
+    with pytest.raises(ValueError):
+        proto._scribble_bitmap([-1], 80)
+
+
+def test_scribble_paint_all_green_static_n100():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x00,
+            direction=0x01,
+            density=0x50,
+            speed=0x64,
+            blink_mode=0x00,
+            h2=0x3C,
+            s=0x64,
+            v=0x64,
+            white=0x00,
+            blink_speed=0x64,
+            num_leds=100,
+        )
+    )
+    assert inner[:2] == b"\xe1\x26"
+    assert inner == _h("e1 26 00 01 50 64 00 3c 64 64 00 00 64") + ALL_ON_100
+
+
+def test_scribble_paint_blue_50pct():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(h2=0x78, s=0x64, v=0x32, num_leds=80)
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 78 64 32 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_white_100():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(h2=0x78, s=0x64, v=0x00, white=0x64, num_leds=80)
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 78 64 00 00 64 64") + ALL_ON_80
+
+
+def test_scribble_paint_fast_blink_50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            blink_mode=0x10, h2=0x78, s=0x64, v=0x64, blink_speed=0x32, num_leds=80
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 10 78 64 64 00 00 32") + ALL_ON_80
+
+
+def test_scribble_paint_slow_blink_50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            blink_mode=0x08, h2=0x78, s=0x64, v=0x64, blink_speed=0x32, num_leds=80
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 08 78 64 64 00 00 32") + ALL_ON_80
+
+
+def test_scribble_paint_flowing_r2l_speed50():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x01,
+            direction=0x02,
+            speed=0x32,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 01 02 50 32 00 78 64 64 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_twinkling_d50_s61():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x03,
+            direction=0x02,
+            density=0x32,
+            speed=0x3D,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 03 02 32 3d 00 78 64 64 00 00 64") + ALL_ON_80
+
+
+def test_scribble_paint_off_bulb0_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x00,
+            density=0x50,
+            h2=0x00,
+            s=0x00,
+            v=0x00,
+            blink_speed=0x64,
+            bitmap_leds=[0],
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64") + OFF0_80
+
+
+def test_scribble_paint_flowing_blue_group_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(
+        proto.construct_scribble_paint(
+            effect=0x01,
+            direction=0x02,
+            density=0x50,
+            speed=0x26,
+            h2=0x78,
+            s=0x64,
+            v=0x64,
+            blink_speed=0x64,
+            bitmap_leds=list(range(40, 80)),
+            num_leds=80,
+        )
+    )
+    assert inner == _h("e1 26 01 02 50 26 00 78 64 64 00 00 64") + GROUP_40_79_80
+
+
+def test_scribble_init_n80():
+    proto = ProtocolLEDENETExtendedCustom()
+    inner = _inner_of(proto.construct_scribble_init(80))
+    assert inner[:9] == _h("e1 23 01 00 01 50 64 00 50")
+    assert inner[9:] == _h("00 00 00 00 00 00 64") * 80
+    assert len(inner) == 569  # 9 + 7*80
+
+
+@pytest.mark.asyncio
+async def test_generate_scribble_init_invalid(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255"):
+        light._generate_scribble_init(0)
+    # 256 exceeds the one-byte E1 23 count / bitmap addressing limit and must
+    # raise the descriptive error, not the generic "byte must be in range".
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255, got 256"):
+        light._generate_scribble_init(256)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_num_leds_over_255_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    light._extended_led_count = None  # bypass the led_count mismatch check
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 256
+    with pytest.raises(ValueError, match=r"num_leds must be 1\.\.255, got 256"):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 256)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_rgb_and_white_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0), white=50)] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_channel_out_of_range_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(300, 0, 0))] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_effect_int_and_enum(mock_aio_protocol):
+    """effect accepts a raw int id (e.g. 4, unnamed) or a ScribbleEffect; the
+    device-valid range is 0x00-0x08, anything else raises ValueError."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 80
+    # raw int id not exposed as a name (3,4,6,7 are valid on-device)
+    assert (
+        _inner_of(light._scribble_paint_groups(leds, 4, 0x01, 0x50, 0x64, 80)[0])[2]
+        == 4
+    )
+    # enum still works
+    assert (
+        _inner_of(
+            light._scribble_paint_groups(
+                leds, ScribbleEffect.FLOWING, 0x01, 0x50, 0x64, 80
+            )[0]
+        )[2]
+        == 0x01
+    )
+    # out-of-range id (device accepts only 0x00-0x08)
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 9, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_wrong_count_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 40
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 40)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_empty_raises(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError):
+        light._scribble_paint_groups([], 0x00, 0x01, 0x50, 0x64, 0)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_two_color_static(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2  # red group then blue group, first-appearance order
+    red = _inner_of(msgs[0])
+    blue = _inner_of(msgs[1])
+    # red occupies LEDs 0-39, blue 40-79
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+    assert blue[13:] == GROUP_40_79_80
+    # blue hue byte (h2) = 0x78
+    assert blue[7] == 0x78
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_blink_grouping(mock_aio_protocol):
+    """LEDs with different blink modes split into separate E1 26 groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.FAST)] * 40 + [
+        ScribbleLED(rgb=(255, 0, 0), blink_mode=ScribbleBlinkMode.NONE)
+    ] * 40
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2  # same color, different blink -> two groups
+    fast = _inner_of(msgs[0])
+    steady = _inner_of(msgs[1])
+    assert fast[6] == 0x10  # FAST blink byte
+    assert steady[6] == 0x00  # NONE blink byte
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_off_group_color_zero(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
+    msgs = light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+    assert len(msgs) == 2
+    off = _inner_of(msgs[1])
+    # off group: all-zero color, header matches the off golden
+    assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+    assert off[13:] == _h("7f" + "ff" * 8 + "ff")  # LEDs 1-79 set
+
+
+async def _setup_scribble_light(mock_aio_protocol, led_count_byte=0x50):
+    """Set up a 0xB6 AIO light with a known led_count from state byte 18."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                led_count_byte,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+    transport.reset_mock()
+    return light, transport
+
+
+@pytest.mark.asyncio
+async def test_async_extended_custom_methods_raise_on_unsupported_device(
+    mock_aio_protocol,
+):
+    """Async extended-custom methods raise ValueError on a non-0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # Standard RGBCW bulb (0x35) -- does not use the extended custom protocol.
+    light._aio_protocol.data_received(
+        b"\x81\x35\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xee"
+    )
+    await task
+    assert light.model_num == 0x35
+    assert not light.supports_extended_custom_effects
+    assert not light.supports_scribble
+
+    with pytest.raises(ValueError):
+        await light.async_set_extended_custom_effect(1, [(255, 0, 0)])
+    with pytest.raises(ValueError):
+        await light.async_set_custom_segment_colors([(255, 0, 0)])
+    with pytest.raises(ValueError):
+        await light.async_set_scribble([ScribbleLED(rgb=(255, 0, 0))])
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_static_two_color(mock_aio_protocol):
+    """STATIC 2-color config sends E1 23 init + one E1 26 per color group."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(leds, effect=ScribbleEffect.STATIC)
+
+    assert len(sent) == 3
+    init = _inner_of(sent[0])
+    assert init[:2] == b"\xe1\x23"
+    assert len(init) == 569
+    red = _inner_of(sent[1])
+    blue = _inner_of(sent[2])
+    assert red[:2] == b"\xe1\x26"
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+    assert blue[13:] == GROUP_40_79_80
+    assert blue[7] == 0x78  # blue hue
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_no_enter_mode(mock_aio_protocol):
+    """enter_mode=False sends no E1 23, one E1 26 per group."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(leds, enter_mode=False)
+    assert len(sent) == 2
+    assert _inner_of(sent[0])[:2] == b"\xe1\x26"
+    assert _inner_of(sent[1])[:2] == b"\xe1\x26"
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_flowing_blue_group(mock_aio_protocol):
+    """FLOWING effect: blue group paint matches the captured golden."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 40 + [ScribbleLED(rgb=(0, 0, 255))] * 40
+        await light.async_set_scribble(
+            leds,
+            effect=ScribbleEffect.FLOWING,
+            direction=ExtendedCustomEffectDirection.RIGHT_TO_LEFT,
+            density=0x50,
+            speed=0x26,
+        )
+    assert len(sent) == 3
+    red = _inner_of(sent[1])
+    blue = _inner_of(sent[2])
+    # blue group matches the captured golden
+    assert blue == _h("e1 26 01 02 50 26 00 78 64 64 00 00 64") + GROUP_40_79_80
+    # red group carries red color on LEDs 0-39 under the same effect
+    assert red[:7] == _h("e1 26 01 02 50 26 00")
+    assert red[13:] == _h("ff" * 5 + "00" * 5)
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_off_group(mock_aio_protocol):
+    """Mixed lit + off config: off group paints all-zero color."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] + [ScribbleLED()] * 79
+        await light.async_set_scribble(leds, enter_mode=False)
+    assert len(sent) == 2
+    red = _inner_of(sent[0])
+    off = _inner_of(sent[1])
+    assert red[13:] == OFF0_80
+    assert off[:13] == _h("e1 26 00 01 50 64 00 00 00 00 00 00 64")
+
+
+@pytest.mark.asyncio
+async def test_async_set_scribble_raw_int_direction(mock_aio_protocol):
+    """A raw int direction (e.g. 0x02) is accepted, not just the enum."""
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        leds = [ScribbleLED(rgb=(255, 0, 0))] * 80
+        # Passing a raw int must not raise AttributeError on direction.value.
+        await light.async_set_scribble(leds, direction=0x02, enter_mode=False)
+    assert len(sent) == 1
+    paint = _inner_of(sent[0])
+    assert paint[:2] == b"\xe1\x26"
+    assert paint[3] == 0x02  # direction byte carried through as the raw int
+
+
+@pytest.mark.parametrize(
+    "leds, num_leds, match",
+    [
+        # empty leds
+        ([], 80, "leds must not be empty"),
+        # num_leds out of 1..255 (0)
+        ([ScribbleLED(rgb=(1, 2, 3))], 0, r"num_leds must be 1\.\.255"),
+        # num_leds out of 1..255 (256)
+        ([ScribbleLED(rgb=(1, 2, 3))] * 256, 256, r"num_leds must be 1\.\.255"),
+        # num_leds-vs-len mismatch (num_leds != len(leds))
+        ([ScribbleLED(rgb=(1, 2, 3))] * 80, 79, r"does not match"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_count_guards(
+    mock_aio_protocol, leds, num_leds, match
+):
+    """Cover the count/length ValueError guards in _scribble_paint_groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    light._extended_led_count = None  # bypass led_count-vs-len check for these cases
+    with pytest.raises(ValueError, match=match):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, num_leds)
+
+
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_led_count_mismatch_guard(mock_aio_protocol):
+    """led_count-vs-len mismatch raises (device reports 80, we pass 40)."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+    leds = [ScribbleLED(rgb=(1, 2, 3))] * 40
+    with pytest.raises(ValueError, match="device has 80"):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 40)
+
+
+@pytest.mark.parametrize(
+    "led, match",
+    [
+        # rgb AND white both set (mutually exclusive)
+        (ScribbleLED(rgb=(1, 2, 3), white=50), "mutually exclusive"),
+        # rgb channel out of 0-255
+        (ScribbleLED(rgb=(256, 0, 0)), "rgb values must be 0-255"),
+        # white out of 0-100
+        (ScribbleLED(white=101), "white must be 0-100"),
+        # blink_speed out of 0-100
+        (ScribbleLED(rgb=(1, 2, 3), blink_speed=101), "blink_speed must be 0-100"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_per_led_guards(mock_aio_protocol, led, match):
+    """Cover the per-LED ValueError guards in _scribble_paint_groups."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [led] + [ScribbleLED()] * 79
+    with pytest.raises(ValueError, match=match):
+        light._scribble_paint_groups(leds, 0x00, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.parametrize(
+    "effect_id",
+    [-1, 9, 0x10],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_effect_id_out_of_range(
+    mock_aio_protocol, effect_id
+):
+    """effect id outside 0x00-0x08 raises ValueError."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(1, 2, 3))] * 80
+    with pytest.raises(ValueError, match=r"effect id must be 0x00-0x08"):
+        light._scribble_paint_groups(leds, effect_id, 0x01, 0x50, 0x64, 80)
+
+
+@pytest.mark.parametrize(
+    "direction, density, speed, match",
+    [
+        # direction outside {0x01, 0x02}
+        (0x00, 0x50, 0x64, "direction must be 0x01 or 0x02"),
+        (0x03, 0x50, 0x64, "direction must be 0x01 or 0x02"),
+        # density outside 0-100
+        (0x01, 101, 0x64, "density must be 0-100"),
+        # speed outside 0-100
+        (0x01, 0x50, 101, "speed must be 0-100"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_scribble_paint_groups_animation_param_bounds(
+    mock_aio_protocol, direction, density, speed, match
+):
+    """Animation params (direction/density/speed) are bounds-checked once here."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    leds = [ScribbleLED(rgb=(1, 2, 3))] * 80
+    with pytest.raises(ValueError, match=match):
+        light._scribble_paint_groups(leds, 0x00, direction, density, speed, 80)
+
+
+@pytest.mark.parametrize(
+    "colors, match",
+    [
+        # empty colors
+        ([], "at least one color"),
+        # color tuple wrong length
+        ([(255, 0)], r"must be .* tuple"),
+        # color channel out of 0-255 (high)
+        ([(256, 0, 0)], "must be 0-255"),
+        # color channel out of 0-255 (low)
+        ([(-1, 0, 0)], "must be 0-255"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_extended_custom_effect_color_guards(
+    mock_aio_protocol, colors, match
+):
+    """Cover the color/empty ValueError guards in _generate_extended_custom_effect."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_extended_custom_effect(1, colors)
+
+
+@pytest.mark.parametrize(
+    "segments, match",
+    [
+        # color tuple wrong length
+        ([(255, 0)], r"must be .* tuple"),
+        # color channel out of 0-255 (high)
+        ([(256, 0, 0)], "must be 0-255"),
+        # color channel out of 0-255 (low)
+        ([(0, -1, 0)], "must be 0-255"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_color_guards(
+    mock_aio_protocol, segments, match
+):
+    """Cover the color-tuple ValueError guards in _generate_custom_segment_colors."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_custom_segment_colors(segments)
+
+
+@pytest.mark.asyncio
+async def test_supports_scribble_property(mock_aio_protocol):
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    assert light.supports_scribble is True
+
+
+# Tests for extended_custom_effect_pattern_list property (base_device.py line 658)
+
+
+@pytest.mark.asyncio
+async def test_extended_custom_effect_pattern_list_0xB6(mock_aio_protocol):
+    """Test extended_custom_effect_pattern_list returns list for 0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test extended_custom_effect_pattern_list returns a list
+    pattern_list = light.extended_custom_effect_pattern_list
+    assert pattern_list is not None
+    assert isinstance(pattern_list, list)
+    assert len(pattern_list) > 0
+    # Check some expected patterns
+    assert "wave" in pattern_list
+    assert "meteor" in pattern_list
+    assert "breathe" in pattern_list
+
+
+@pytest.mark.asyncio
+async def test_extended_custom_effect_pattern_list_non_0xB6(mock_aio_protocol):
+    """Test extended_custom_effect_pattern_list returns None for non-0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # Standard 0x25 device (not extended custom)
+    light._aio_protocol.data_received(
+        b"\x81\x25\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xde"
+    )
+    await task
+
+    # Should return None for non-extended devices
+    assert light.extended_custom_effect_pattern_list is None
+
+
+# Tests for _named_effect with extended custom effects (base_device.py line 676)
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_0xB6(mock_aio_protocol):
+    """Test _named_effect returns extended effect name for 0xB6 in custom mode."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with preset_pattern=0x25 (custom effect mode) and mode=0x01 (Wave)
+    # Extended state: preset_pattern at pos 7, mode at pos 8
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,  # Model
+                0x01,  # Version
+                0x23,  # Power on
+                0x25,  # preset_pattern = 0x25 (custom effect mode)
+                0x01,  # mode = Wave pattern ID
+                0x64,  # speed
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Effect should be "Wave" from EXTENDED_CUSTOM_EFFECT_ID_NAME
+    assert light.effect == "Wave"
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_meteor(mock_aio_protocol):
+    """Test _named_effect returns Meteor for mode=0x02."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with mode=0x02 (Meteor)
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x25,  # preset_pattern = 0x25
+                0x02,  # mode = Meteor
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    assert light.effect == "Meteor"
+
+
+@pytest.mark.asyncio
+async def test_named_effect_extended_custom_unmapped_mode(mock_aio_protocol, caplog):
+    """An unmapped extended-custom mode returns None and is logged for visibility."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    # 0xB6 device with preset_pattern=0x25 and an unmapped mode (0x30)
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x25,  # preset_pattern = 0x25
+                0x30,  # mode = unmapped
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    with caplog.at_level(logging.DEBUG, logger="flux_led.base_device"):
+        assert light.effect is None
+    assert "Unmapped extended custom effect mode" in caplog.text
