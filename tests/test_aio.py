@@ -4394,8 +4394,8 @@ async def test_setup_0xB6_surplife_real_frame(mock_aio_protocol):
 async def test_0xB6_colorful_solid_red_full(mock_aio_protocol):
     """0xB6 "Colorful" solid red at full brightness is a plain color, not an effect.
 
-    Hardware capture: preset_pattern=0x24, mode=0x01 -> reported as a color with
-    no effect (verified on device).
+    Real device EA81 capture (app Colorful -> red): preset_pattern=0x24, mode=0x01
+    -> reported as a color with no effect (verified on device).
     """
     light = AIOWifiLedBulb("192.168.1.166")
 
@@ -4419,7 +4419,8 @@ async def test_0xB6_colorful_solid_red_full(mock_aio_protocol):
 async def test_0xB6_colorful_solid_red_dim(mock_aio_protocol):
     """0xB6 "Colorful" solid red dimmed to 30% is a plain color, not an effect.
 
-    Hardware capture: preset_pattern=0x24, mode=0x01, value byte 0x1e (30%).
+    Real device EA81 capture (app Colorful -> red @ 30%): preset_pattern=0x24,
+    mode=0x01, value byte 0x1e (30%).
     """
     light = AIOWifiLedBulb("192.168.1.166")
 
@@ -4441,7 +4442,10 @@ async def test_0xB6_colorful_solid_red_dim(mock_aio_protocol):
 
 @pytest.mark.asyncio
 async def test_0xB6_scene_wave(mock_aio_protocol):
-    """0xB6 "Scenes" animated effect reports preset_pattern=0x25, mode=effect id."""
+    """0xB6 "Scenes" animated effect reports preset_pattern=0x25, mode=effect id.
+
+    Real device EA81 capture of the app's Scenes -> Wave (preset 0x25, mode 0x01).
+    """
     light = AIOWifiLedBulb("192.168.1.166")
 
     def _updated_callback(*args, **kwargs):
@@ -4450,7 +4454,7 @@ async def test_0xB6_scene_wave(mock_aio_protocol):
     task = asyncio.create_task(light.async_setup(_updated_callback))
     _transport, _protocol = await mock_aio_protocol()
     light._aio_protocol.data_received(
-        bytes.fromhex("ea810100b60923250164f0b46464ff000500500000002002010003")
+        bytes.fromhex("ea810100b60923250150f0b46464ff000500500000002002010003")
     )
     await task
     assert light.model_num == 0xB6
@@ -4459,7 +4463,11 @@ async def test_0xB6_scene_wave(mock_aio_protocol):
 
 @pytest.mark.asyncio
 async def test_0xB6_scene_static_fill(mock_aio_protocol):
-    """0xB6 "Scenes" Static Fill reports preset_pattern=0x25, mode=0x66."""
+    """0xB6 "Scenes" Static Fill reports preset_pattern=0x25, mode=0x66.
+
+    Real device EA81 capture of the app's Scenes -> Static Fill (preset 0x25,
+    mode 0x66, blue).
+    """
     light = AIOWifiLedBulb("192.168.1.166")
 
     def _updated_callback(*args, **kwargs):
@@ -4468,7 +4476,7 @@ async def test_0xB6_scene_static_fill(mock_aio_protocol):
     task = asyncio.create_task(light.async_setup(_updated_callback))
     _transport, _protocol = await mock_aio_protocol()
     light._aio_protocol.data_received(
-        bytes.fromhex("ea810100b60923256650f0786464ff000500500000002002010003")
+        bytes.fromhex("ea810100b60923256632f0786464ff000500500000002002010003")
     )
     await task
     assert light.model_num == 0xB6
@@ -5042,7 +5050,9 @@ def test_protocol_construct_levels_change_0xB6():
     assert msg[2] == 0xB2
     assert msg[3] == 0xB3
 
-    # Pin the full inner E1 22 uniform frame.
+    # Pin the full inner E1 22 uniform frame. This is byte-identical to the real
+    # app "Colorful -> red" packet captured from the device (inner:
+    # e1 22 00 00 00 00 14 [00 64 64 00 00] x 20).
     inner = _inner_of(msg)
     header = _h("e1 22 00 00 00 00 14")
     # (255,0,0): hue 0, sat 100, val 100 -> [00 64 64 00 00]
