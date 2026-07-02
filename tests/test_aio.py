@@ -5063,7 +5063,7 @@ def test_protocol_construct_levels_change_0xB6():
 
 
 def test_protocol_construct_levels_change_with_white():
-    """Test construct_levels_change combines warm and cool white.
+    """Test construct_levels_change for a white-only set.
 
     A white-only set is sent as a uniform E1 22 with the literal white segment
     [00 64 00 00 W], where W is the 0-100 white level (S byte MUST be 0x64).
@@ -5094,18 +5094,23 @@ def test_protocol_construct_levels_change_with_white():
     assert len(inner) == 7 + 20 * 5
 
 
-def test_protocol_construct_levels_change_white_clamping():
-    """Test that combined white is clamped to 255 (W = 100)."""
+def test_protocol_construct_levels_change_white_not_doubled():
+    """A single white value mirrored into warm+cool must not be double-counted.
+
+    The device has one white LED; _generate_levels_change mirrors a single white
+    value into BOTH warm and cool for non-CCT devices, so combining them by max
+    (not sum) is required. Regression test: warm=cool=128 (a mirrored single
+    white of 128) must yield W = round(128*100/255) = 50, not 100.
+    """
     proto = ProtocolLEDENETExtendedCustom()
 
-    # Test with white values that exceed 255 when combined
     result = proto.construct_levels_change(
         persist=1,
         red=0,
         green=0,
         blue=0,
-        warm_white=200,
-        cool_white=200,  # Total would be 400, should clamp to 255 -> W=100
+        warm_white=128,
+        cool_white=128,  # mirrored single white; max -> 128 -> W=50 (not 2x)
         write_mode=0,
     )
 
@@ -5114,7 +5119,7 @@ def test_protocol_construct_levels_change_white_clamping():
 
     inner = _inner_of(result[0])
     header = _h("e1 22 00 00 00 00 14")
-    white_seg = _h("00 64 00 00 64")  # clamped white -> W=100
+    white_seg = _h("00 64 00 00 32")  # W = 50 = 0x32 (not doubled to 0x64)
     expected = header + white_seg * 20
     assert inner == expected
 

@@ -1739,9 +1739,10 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
         white, never both. Warm and cool white are combined into a single
         white level.
         """
-        # Combine warm and cool white into single white level
-        # (device only has one white LED)
-        w = min((warm_white or 0) + (cool_white or 0), 255)
+        # The device has a single white LED. The caller (_generate_levels_change)
+        # mirrors a single white value into BOTH warm and cool for non-CCT
+        # devices, so take the max (not the sum) to avoid double-counting it.
+        w = max(warm_white or 0, cool_white or 0)
 
         if w > 0 and not (red or green or blue):
             # WHITE: scale 0-255 white to the device's 0-100 white level.
