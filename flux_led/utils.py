@@ -28,14 +28,27 @@ class TemperatureBrightness(NamedTuple):
     brightness: int
 
 
+def _is_valid_color_tuple(value: object) -> bool:
+    """Return True if value is a 3/4/5-length tuple of 0-255 integer channels."""
+    if not isinstance(value, tuple) or len(value) not in [3, 4, 5]:
+        return False
+    # bool is a subclass of int but is never a valid channel value
+    return all(
+        isinstance(channel, int)
+        and not isinstance(channel, bool)
+        and 0 <= channel <= 255
+        for channel in value
+    )
+
+
 class utils:
     @staticmethod
     def color_object_to_tuple(
         color: tuple[int, ...] | str,
     ) -> tuple[int, ...] | None:
-        # see if it's already a color tuple
-        if isinstance(color, tuple) and len(color) in [3, 4, 5]:
-            return color
+        # see if it's already a valid color tuple
+        if isinstance(color, tuple):
+            return color if _is_valid_color_tuple(color) else None
 
         # can't convert non-string
         if not isinstance(color, str):
@@ -56,9 +69,9 @@ class utils:
         # try to convert a string RGB tuple
         with contextlib.suppress(Exception):
             val = ast.literal_eval(color)
-            if type(val) is not tuple or len(val) not in [3, 4, 5]:
+            if not _is_valid_color_tuple(val):
                 raise Exception
-            return val
+            return cast("tuple[int, ...]", val)
 
         return None
 
