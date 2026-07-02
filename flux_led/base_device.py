@@ -667,6 +667,11 @@ class LEDENETDevice:
         mode = self.raw_state.mode
         pattern_code = self.preset_pattern_num
         protocol = self.protocol
+        if self.supports_extended_custom_effects:
+            # 0xB6 "Colorful" (solid or multi-segment) reports preset_pattern=0x24;
+            # it is a plain color, not an effect (hardware-verified), so report none.
+            if pattern_code == 0x24:
+                return None
         if protocol in OLD_EFFECTS_PROTOCOLS:
             effect_id = (pattern_code << 8) + mode - 99
             return ORIGINAL_ADDRESSABLE_EFFECT_ID_NAME.get(effect_id)
@@ -1324,6 +1329,35 @@ class LEDENETDevice:
 
         assert self._protocol is not None
         return self._protocol.construct_custom_effect(rgb_list, speed, transition_type)
+
+    def _generate_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Generate custom segment colors protocol bytes with validation.
+
+        Only supported on devices using the extended protocol (e.g., 0xB6).
+
+        Args:
+            segments: List of up to 20 segment colors. Each is (R, G, B) or None for off.
+        """
+        # Reject more than 20 segments (the wire format supports at most 20)
+        if len(segments) > 20:
+            raise ValueError(f"at most 20 segments are supported, got {len(segments)}")
+
+        # Validate color tuples
+        for idx, color in enumerate(segments):
+            if color is None:
+                continue
+            if len(color) != 3:
+                raise ValueError(f"Segment {idx} must be (R, G, B) tuple or None")
+            for c in color:
+                if not 0 <= c <= 255:
+                    raise ValueError(f"Color values must be 0-255, got {c}")
+
+        assert self._protocol is not None
+        assert isinstance(self._protocol, ProtocolLEDENETExtendedCustom)
+        return self._protocol.construct_custom_segment_colors(segments)
 
     def _effect_to_pattern(self, effect: str) -> int:
         """Convert an effect to a pattern code."""
