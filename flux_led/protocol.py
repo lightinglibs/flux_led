@@ -1680,6 +1680,132 @@ class ProtocolLEDENETExtendedCustom(ProtocolLEDENET25Byte):
             return None
         return raw_state[LEDENET_EXTENDED_STATE_LED_COUNT_POS]
 
+    def _rgb_to_hsv_bytes_rgbw(
+        self, r: int, g: int, b: int, white: int = 0
+    ) -> list[int]:
+        """Convert RGBW (0-255) to 5-byte HSVW format for extended effect commands.
+
+        Output format:
+          [H/2, S, V, 0x00, W]
+           0    1  2   3    4
+           |    |  |   |    white LED brightness (0-255)
+           |    |  |   unused (always 0x00)
+           |    |  value/brightness (0-100)
+           |    saturation (0-100)
+           hue divided by 2 (0-180)
+
+        Args:
+            r: Red component (0-255)
+            g: Green component (0-255)
+            b: Blue component (0-255)
+            white: White LED brightness (0-255)
+
+        Returns:
+            5-byte list [H/2, S, V, 0x00, W]
+        """
+        h, s, v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return [int(h * 180), int(s * 100), int(v * 100), 0x00, white]
+
+    def construct_levels_change(
+        self,
+        persist: int,
+        red: int | None,
+        green: int | None,
+        blue: int | None,
+        warm_white: int | None,
+        cool_white: int | None,
+        write_mode: LevelWriteMode | int,
+    ) -> list[bytearray]:
+        """Construct a level change using a uniform 0xE1 0x22 fill command.
+
+        The vendor app sets a solid color with a UNIFORM 0xE1 0x22 command (all
+        20 segments identical), which lands the device in preset_pattern=0x24
+        ("Colorful" = a plain color) and reports effect=None with the correct
+        rgb/brightness. This is hardware-verified on the 0xB6 device.
+
+        Inner message format (before wrapping):
+          pos  0  1  2  3  4  5  6  [ 5-byte segment ] x 20
+              E1 22 00 00 00 00 14  [ H/2 S V 00 WW ]
+                                 |  each of the 20 identical segments:
+                                 |    color: [H/2, S, V, 0x00, 0x00]
+                                 |    white: [0x00, 0x64, 0x00, 0x00, W]
+                                 segment count (0x14 = 20)
+
+        The device is single-white RGB and the app sends EITHER a color OR a
+        white, never both. Warm and cool white are combined into a single
+        white level.
+        """
+        # The device has a single white LED. The caller (_generate_levels_change)
+        # mirrors a single white value into BOTH warm and cool for non-CCT
+        # devices, so take the max (not the sum) to avoid double-counting it.
+        w = max(warm_white or 0, cool_white or 0)
+
+        if w > 0 and not (red or green or blue):
+            # WHITE: scale 0-255 white to the device's 0-100 white level.
+            # S byte MUST be 0x64 (100); with S=0 the device silently ignores
+            # the frame (hardware-verified).
+            white_level = max(0, min(100, round(w * 100 / 255)))
+            segment = [0x00, 0x64, 0x00, 0x00, white_level]
+        else:
+            # COLOR: [H/2, S, V, 0x00, 0x00]
+            segment = self._rgb_to_hsv_bytes((red or 0), (green or 0), (blue or 0))
+
+        # Uniform E1 22 fill: header + segment repeated for all 20 segments
+        inner = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+        for _ in range(20):
+            inner.extend(segment)
+
+        return [
+            self.construct_wrapped_message(
+                inner, inner_pre_constructed=True, version=0x02
+            )
+        ]
+
+    def _rgb_to_hsv_bytes(self, r: int, g: int, b: int) -> list[int]:
+        """Convert RGB (0-255) to 5-byte HSV format [H/2, S, V, 0, 0].
+
+        This format is used by extended commands (0xE1 0x21, 0xE1 0x22).
+
+        Equivalent to the RGBW variant with white=0, which yields the same
+        [H/2, S, V, 0x00, 0x00] layout, so delegate to avoid duplicating the
+        conversion logic.
+        """
+        return self._rgb_to_hsv_bytes_rgbw(r, g, b, 0)
+
+    def construct_custom_segment_colors(
+        self,
+        segments: list[tuple[int, int, int] | None],
+    ) -> bytearray:
+        """Construct a custom segment colors command (0xE1 0x22).
+
+        Sets static HSV colors for each of 20 segments on the light strip.
+        Used by devices like AK001-ZJ21413 (model 0xB6) under the "colorful" menu.
+
+        Protocol format:
+          e1 22 00 00 00 00 14 [H/2 S V 00 00] x 20
+
+        Args:
+            segments: List of up to 20 segment colors. Each segment is either:
+                - None or (0, 0, 0) for off
+                - (R, G, B) tuple with values 0-255
+
+        Returns:
+            Wrapped command bytearray
+        """
+        # Build inner message: header + 20 segments
+        msg = bytearray([0xE1, 0x22, 0x00, 0x00, 0x00, 0x00, 0x14])
+
+        for i in range(20):
+            segment = segments[i] if i < len(segments) else None
+            if segment and segment != (0, 0, 0):
+                msg.extend(self._rgb_to_hsv_bytes(*segment))
+            else:
+                msg.extend([0x00, 0x00, 0x00, 0x00, 0x00])  # Off
+
+        return self.construct_wrapped_message(
+            msg, inner_pre_constructed=True, version=0x02
+        )
+
 
 class ProtocolLEDENETAddressableBase(ProtocolLEDENET9Byte):
     """Base class for addressable protocols."""

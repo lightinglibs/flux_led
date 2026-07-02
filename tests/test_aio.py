@@ -4383,6 +4383,56 @@ async def test_setup_0xB6_surplife_real_frame(mock_aio_protocol):
     assert light.led_count == 100
 
 
+@pytest.mark.asyncio
+async def test_0xB6_colorful_solid_red_full(mock_aio_protocol):
+    """0xB6 "Colorful" solid red at full brightness is a plain color, not an effect.
+
+    Real device EA81 capture (app Colorful -> red): preset_pattern=0x24, mode=0x01
+    -> reported as a color with no effect (verified on device).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923240164f0b46464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect is None
+    assert light.is_on is True
+    assert light.rgb == (255, 0, 0)
+    assert light.brightness == 255
+
+
+@pytest.mark.asyncio
+async def test_0xB6_colorful_solid_red_dim(mock_aio_protocol):
+    """0xB6 "Colorful" solid red dimmed to 30% is a plain color, not an effect.
+
+    Real device EA81 capture (app Colorful -> red @ 30%): preset_pattern=0x24,
+    mode=0x01, value byte 0x1e (30%).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923240164f0b4641eff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect is None
+    assert light.is_on is True
+    # Clearly dimmed (well below the full-brightness value of 255).
+    assert light.brightness == 76
+
+
 def test_protocol_extended_custom_state_response_length():
     """ProtocolLEDENETExtendedCustom expects the 27-byte extended state."""
     proto = ProtocolLEDENETExtendedCustom()
@@ -4455,3 +4505,424 @@ def test_extended_state_led_count():
     # Too-short / invalid frame returns None
     assert proto.extended_state_led_count(b"\xea\x81\x01") is None
     assert proto.extended_state_led_count(b"\x00" * 27) is None
+
+
+def _inner_of(wrapped: bytearray) -> bytes:
+    """Extract the inner message from a B0B1B2B3-wrapped result.
+
+    wrapper = b0 b1 b2 b3 | 00 01 | ver | counter | len_hi len_lo | inner | cksum
+    """
+    inner_len = (wrapped[8] << 8) | wrapped[9]
+    return bytes(wrapped[10 : 10 + inner_len])
+
+
+def _h(s: str) -> bytes:
+    return bytes.fromhex(s.replace(" ", ""))
+
+
+async def _setup_scribble_light(mock_aio_protocol, led_count_byte=0x50):
+    """Set up a 0xB6 AIO light with a known led_count from state byte 18."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                led_count_byte,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+    transport.reset_mock()
+    return light, transport
+
+
+def test_protocol_construct_levels_change_0xB6():
+    """Test construct_levels_change sets a color via a uniform E1 22 fill.
+
+    A solid color must land the device in preset 0x24 ("Colorful"), so it is
+    sent as a uniform E1 22 (all 20 segments identical), not an E1 21 Static
+    Fill (hardware-verified).
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with RGB values (pure red)
+    result = proto.construct_levels_change(
+        persist=1,
+        red=255,
+        green=0,
+        blue=0,
+        warm_white=0,
+        cool_white=0,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+    # Check wrapper header
+    assert msg[0] == 0xB0
+    assert msg[1] == 0xB1
+    assert msg[2] == 0xB2
+    assert msg[3] == 0xB3
+
+    # Pin the full inner E1 22 uniform frame. This is byte-identical to the real
+    # app "Colorful -> red" packet captured from the device (inner:
+    # e1 22 00 00 00 00 14 [00 64 64 00 00] x 20).
+    inner = _inner_of(msg)
+    header = _h("e1 22 00 00 00 00 14")
+    # (255,0,0): hue 0, sat 100, val 100 -> [00 64 64 00 00]
+    red_seg = _h("00 64 64 00 00")
+    expected = header + red_seg * 20
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_levels_change_with_white():
+    """Test construct_levels_change for a white-only set.
+
+    A white-only set is sent as a uniform E1 22 with the literal white segment
+    [00 64 00 00 W], where W is the 0-100 white level (S byte MUST be 0x64).
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with white values: warm_white=255 -> W = round(255*100/255) = 100
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=255,
+        cool_white=0,
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    msg = result[0]
+    assert isinstance(msg, bytearray)
+
+    inner = _inner_of(msg)
+    header = _h("e1 22 00 00 00 00 14")
+    # W = 100 = 0x64; segment [00 64 00 00 64]
+    white_seg = _h("00 64 00 00 64")
+    expected = header + white_seg * 20
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_levels_change_white_not_doubled():
+    """A single white value mirrored into warm+cool must not be double-counted.
+
+    The device has one white LED; _generate_levels_change mirrors a single white
+    value into BOTH warm and cool for non-CCT devices, so combining them by max
+    (not sum) is required. Regression test: warm=cool=128 (a mirrored single
+    white of 128) must yield W = round(128*100/255) = 50, not 100.
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    result = proto.construct_levels_change(
+        persist=1,
+        red=0,
+        green=0,
+        blue=0,
+        warm_white=128,
+        cool_white=128,  # mirrored single white; max -> 128 -> W=50 (not 2x)
+        write_mode=0,
+    )
+
+    assert len(result) == 1
+    assert isinstance(result[0], bytearray)
+
+    inner = _inner_of(result[0])
+    header = _h("e1 22 00 00 00 00 14")
+    white_seg = _h("00 64 00 00 32")  # W = 50 = 0x32 (not doubled to 0x64)
+    expected = header + white_seg * 20
+    assert inner == expected
+
+
+def test_protocol_rgb_to_hsv_bytes_rgbw():
+    """Test _rgb_to_hsv_bytes_rgbw conversion."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test pure red with white
+    result = proto._rgb_to_hsv_bytes_rgbw(255, 0, 0, 100)
+    assert len(result) == 5
+    assert result[0] == 0  # Hue (red = 0)
+    assert result[1] == 100  # Saturation
+    assert result[2] == 100  # Value
+    assert result[3] == 0x00  # Unused
+    assert result[4] == 100  # White
+
+    # Test pure green
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 255, 0, 0)
+    assert result[0] == 60  # Hue (green = 120/2)
+
+    # Test pure blue
+    result = proto._rgb_to_hsv_bytes_rgbw(0, 0, 255, 255)
+    assert result[0] == 120  # Hue (blue = 240/2)
+    assert result[4] == 255  # White
+
+
+def test_protocol_construct_custom_segment_colors():
+    """Test construct_custom_segment_colors command format."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Test with a few segments
+    segments = [(255, 0, 0), None, (0, 0, 255)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+    # Check wrapper header
+    assert result[0] == 0xB0
+    assert result[1] == 0xB1
+    assert result[2] == 0xB2
+    assert result[3] == 0xB3
+
+    # Pin the full inner E1 22 payload: header + 0x14 (20) count byte, then
+    # one 5-byte [H/2, S, V, 0x00, 0x00] record per segment, padded to 20.
+    inner = _inner_of(result)
+    header = _h("e1 22 00 00 00 00 14")
+    red = _h("00 64 64 00 00")  # (255,0,0): hue 0, sat 100, val 100
+    off = _h("00 00 00 00 00")  # None / off segment
+    blue = _h("78 64 64 00 00")  # (0,0,255): hue 240 -> H/2 = 0x78, sat/val 100
+    # 3 provided segments (red, off, blue) + 17 off segments = 20 total.
+    expected = header + red + off + blue + off * 17
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_custom_segment_colors_rgb_captured():
+    """Per-segment RGB encodings, anchored to the 2026-07-02 device capture.
+
+    From the vendor app "Colorful" segment paint (hardware-verified): red, green
+    and blue segments encode as the exact H/2 hue bytes below (green = 0x3c,
+    blue = 0x78), in the same 20-segment E1 22 command used for a single color.
+    See docs/device_testing_0xB6.md.
+    """
+    proto = ProtocolLEDENETExtendedCustom()
+
+    segments = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    inner = _inner_of(result)
+    header = _h("e1 22 00 00 00 00 14")
+    red = _h("00 64 64 00 00")  # hue 0
+    green = _h("3c 64 64 00 00")  # hue 120 -> H/2 = 0x3c
+    blue = _h("78 64 64 00 00")  # hue 240 -> H/2 = 0x78
+    off = _h("00 00 00 00 00")
+    expected = header + red + green + blue + off * 17
+    assert inner == expected
+    assert len(inner) == 7 + 20 * 5
+
+
+def test_protocol_construct_custom_segment_colors_all_off():
+    """Test construct_custom_segment_colors with all segments off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # All None segments
+    segments = [None] * 10
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+def test_protocol_construct_custom_segment_colors_zero_tuple():
+    """Test that (0,0,0) is treated as off."""
+    proto = ProtocolLEDENETExtendedCustom()
+
+    # Mix of None and (0,0,0)
+    segments = [None, (0, 0, 0), (255, 0, 0)]
+    result = proto.construct_custom_segment_colors(segments)
+
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_async_set_custom_segment_colors_0xB6(mock_aio_protocol):
+    """Test async_set_custom_segment_colors sends correct bytes."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    transport, _protocol = await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    transport.reset_mock()
+
+    await light.async_set_custom_segment_colors(
+        segments=[(255, 0, 0), None, (0, 0, 255)]
+    )
+
+    assert transport.write.called
+    written_data = transport.write.call_args[0][0]
+    # Verify it's a wrapped message
+    assert written_data[0] == 0xB0
+    assert written_data[1] == 0xB1
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_validation(mock_aio_protocol):
+    """Test validation in _generate_custom_segment_colors."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+
+    light._aio_protocol.data_received(
+        bytes(
+            (
+                0xEA,
+                0x81,
+                0x01,
+                0x00,
+                0xB6,
+                0x01,
+                0x23,
+                0x61,
+                0x24,
+                0x64,
+                0x0F,
+                0x00,
+                0x00,
+                0x00,
+                0x64,
+                0x64,
+                0x00,
+                0x00,
+                0x00,
+                0x00,
+                0x83,
+            )
+        )
+    )
+    await task
+
+    # Test invalid color tuple (not 3 elements)
+    with pytest.raises(ValueError, match=r"must be .* tuple"):
+        light._generate_custom_segment_colors([(255, 0)])
+
+    # Test color values out of range (> 255)
+    with pytest.raises(ValueError, match="must be 0-255"):
+        light._generate_custom_segment_colors([(256, 0, 0)])
+
+    # Test valid segments with None
+    result = light._generate_custom_segment_colors([None, (255, 0, 0), None])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_rejects_too_many_segments(
+    mock_aio_protocol,
+):
+    """Test that too many segments (>20) raise ValueError instead of truncating."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+
+    # 21 segments (one over the 20 max) must raise; 20 is still accepted.
+    segments = [(i * 10, 0, 0) for i in range(21)]
+    with pytest.raises(ValueError, match="at most 20 segments are supported, got 21"):
+        light._generate_custom_segment_colors(segments)
+
+    result = light._generate_custom_segment_colors(segments[:20])
+    assert isinstance(result, bytearray)
+
+
+@pytest.mark.parametrize(
+    "segments, match",
+    [
+        # color tuple wrong length
+        ([(255, 0)], r"must be .* tuple"),
+        # color channel out of 0-255 (high)
+        ([(256, 0, 0)], "must be 0-255"),
+        # color channel out of 0-255 (low)
+        ([(0, -1, 0)], "must be 0-255"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_generate_custom_segment_colors_color_guards(
+    mock_aio_protocol, segments, match
+):
+    """Cover the color-tuple ValueError guards in _generate_custom_segment_colors."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+    with pytest.raises(ValueError, match=match):
+        light._generate_custom_segment_colors(segments)
+
+
+@pytest.mark.asyncio
+async def test_async_extended_custom_methods_raise_on_unsupported_device(
+    mock_aio_protocol,
+):
+    """Async extended-custom methods raise ValueError on a non-0xB6 device."""
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # Standard RGBCW bulb (0x35) -- does not use the extended custom protocol.
+    light._aio_protocol.data_received(
+        b"\x81\x35\x23\x61\x05\x10\xb6\x00\x98\x19\x04\x25\x0f\xee"
+    )
+    await task
+    assert light.model_num == 0x35
+    assert not light.supports_extended_custom_effects
+
+    with pytest.raises(ValueError):
+        await light.async_set_custom_segment_colors([(255, 0, 0)])
