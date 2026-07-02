@@ -19,6 +19,9 @@ from flux_led.const import (
     STATE_RED,
     STATE_WARM_WHITE,
     TRANSITION_GRADUAL,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
+    ExtendedCustomEffectPattern,
     MultiColorEffects,
     ScribbleEffect,
     ScribbleLED,
@@ -1528,6 +1531,66 @@ class TestLight(unittest.TestCase):
     @patch("flux_led.WifiLedBulb._send_msg")
     @patch("flux_led.WifiLedBulb._read_msg")
     @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setExtendedCustomEffect_enums(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """setExtendedCustomEffect accepts the public enums, not just ints."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+
+        # Passing the enum members must not raise and must send a wrapped message.
+        light.setExtendedCustomEffect(
+            pattern_id=ExtendedCustomEffectPattern.WAVE,
+            colors=[(255, 0, 0), (0, 255, 0)],
+            speed=50,
+            density=50,
+            direction=ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+            option=ExtendedCustomEffectOption.VARIANT_1,
+        )
+        assert mock_send.called
+        enum_sent = mock_send.call_args[0][0]
+        assert enum_sent[0] == 0xB0
+        assert enum_sent[1] == 0xB1
+
+        # The produced inner message must equal the equivalent all-int call.
+        # (The B0B1 wrapper carries an incrementing counter, so compare the
+        # unwrapped inner E1 21 payload.)
+        int_bytes = light._generate_extended_custom_effect(
+            ExtendedCustomEffectPattern.WAVE.value,
+            [(255, 0, 0), (0, 255, 0)],
+            50,
+            50,
+            ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value,
+            ExtendedCustomEffectOption.VARIANT_1.value,
+        )
+        enum_bytes = light._generate_extended_custom_effect(
+            ExtendedCustomEffectPattern.WAVE,
+            [(255, 0, 0), (0, 255, 0)],
+            50,
+            50,
+            ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+            ExtendedCustomEffectOption.VARIANT_1,
+        )
+        assert self._inner_of(enum_bytes) == self._inner_of(int_bytes)
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
     def test_0xB6_setCustomSegmentColors(self, mock_connect, mock_read, mock_send):
         """Test sync setCustomSegmentColors for 0xB6 device."""
         calls = 0
@@ -1642,6 +1705,38 @@ class TestLight(unittest.TestCase):
         paint = self._inner_of(mock_send.call_args_list[0].args[0])
         assert paint[:2] == b"\xe1\x26"
         assert paint[3] == 0x02  # direction byte
+
+    @patch("flux_led.WifiLedBulb._send_msg")
+    @patch("flux_led.WifiLedBulb._read_msg")
+    @patch("flux_led.WifiLedBulb.connect")
+    def test_0xB6_setScribble_invalid_input_sends_nothing(
+        self, mock_connect, mock_read, mock_send
+    ):
+        """Invalid scribble input raises before any send (including the E1 23 init)."""
+        calls = 0
+
+        def read_data(expected):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                self.assertEqual(expected, 2)
+                return bytearray(b"\xea\x81")
+            if calls == 2:
+                self.assertEqual(expected, 25)
+                return bytearray(
+                    b"\x01\x00\xb6\x09\x24\x66\x01\x64\xf0\x00\x00\x00\x00\x64\x05\x00\x64\x00\x00\x00\x20\x02\x01\x00\x03"
+                )
+
+        mock_read.side_effect = read_data
+        light = flux_led.WifiLedBulb("192.168.1.164")
+        self.assertEqual(light.protocol, PROTOCOL_LEDENET_EXTENDED_CUSTOM)
+        mock_send.reset_mock()
+
+        # 3 LEDs on a 100-LED device is a length mismatch -> ValueError, and
+        # nothing (not even the E1 23 init) must be sent.
+        with self.assertRaises(ValueError):
+            light.setScribble([ScribbleLED(rgb=(255, 0, 0))] * 3, enter_mode=True)
+        assert mock_send.call_count == 0
 
     @staticmethod
     def _inner_of(wrapped: bytearray) -> bytes:

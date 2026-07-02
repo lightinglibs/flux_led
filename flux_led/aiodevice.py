@@ -35,6 +35,8 @@ from .const import (
     STATE_RED,
     STATE_WARM_WHITE,
     ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
+    ExtendedCustomEffectPattern,
     MultiColorEffects,
     ScribbleEffect,
     ScribbleLED,
@@ -427,12 +429,12 @@ class AIOWifiLedBulb(LEDENETDevice):
 
     async def async_set_extended_custom_effect(
         self,
-        pattern_id: int,
+        pattern_id: ExtendedCustomEffectPattern | int,
         colors: list[tuple[int, int, int]],
         speed: int = 50,
         density: int = 50,
-        direction: int = 0x01,
-        option: int = 0x00,
+        direction: ExtendedCustomEffectDirection | int = 0x01,
+        option: ExtendedCustomEffectOption | int = 0x00,
     ) -> None:
         """Set an extended custom effect on the device.
 
@@ -502,11 +504,15 @@ class AIOWifiLedBulb(LEDENETDevice):
             if isinstance(direction, ExtendedCustomEffectDirection)
             else int(direction)
         )
+        # Build (and validate) the paint messages up front so an invalid call
+        # raises before any network send -- otherwise the E1 23 init would leave
+        # the device in scribble-init mode with nothing rendered.
+        paint_msgs = self._scribble_paint_groups(
+            leds, effect, direction_val, density, speed, num_leds
+        )
         if enter_mode:
             await self._async_send_msg(self._generate_scribble_init(num_leds))
-        for msg in self._scribble_paint_groups(
-            leds, effect, direction_val, density, speed, num_leds
-        ):
+        for msg in paint_msgs:
             await self._async_send_msg(msg)
 
     async def async_set_effect(

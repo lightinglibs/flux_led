@@ -23,6 +23,8 @@ from .const import (
     STATE_RED,
     STATE_WARM_WHITE,
     ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
+    ExtendedCustomEffectPattern,
     ScribbleEffect,
     ScribbleLED,
 )
@@ -396,12 +398,12 @@ class WifiLedBulb(LEDENETDevice):
 
     def setExtendedCustomEffect(
         self,
-        pattern_id: int,
+        pattern_id: ExtendedCustomEffectPattern | int,
         colors: list[tuple[int, int, int]],
         speed: int = 50,
         density: int = 50,
-        direction: int = 0x01,
-        option: int = 0x00,
+        direction: ExtendedCustomEffectDirection | int = 0x01,
+        option: ExtendedCustomEffectOption | int = 0x00,
         retry: int = DEFAULT_RETRIES,
     ) -> None:
         """Set an extended custom effect on the device.
@@ -483,13 +485,17 @@ class WifiLedBulb(LEDENETDevice):
             if isinstance(direction, ExtendedCustomEffectDirection)
             else int(direction)
         )
+        # Build (and validate) the paint messages up front so an invalid call
+        # raises before any network send -- otherwise the E1 23 init would leave
+        # the device in scribble-init mode with nothing rendered.
+        paint_msgs = self._scribble_paint_groups(
+            leds, effect, direction_val, density, speed, num_leds
+        )
         if enter_mode:
             self._send_and_read_with_retry(
                 self._generate_scribble_init(num_leds), 0, retry=retry
             )
-        for msg in self._scribble_paint_groups(
-            leds, effect, direction_val, density, speed, num_leds
-        ):
+        for msg in paint_msgs:
             self._send_and_read_with_retry(msg, 0, retry=retry)
 
     def refreshState(self) -> None:

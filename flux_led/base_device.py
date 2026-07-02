@@ -49,6 +49,8 @@ from .const import (  # imported for back compat, remove once Home Assistant no 
     STATE_RED,
     STATE_WARM_WHITE,
     STATIC_MODES,
+    ExtendedCustomEffectDirection,
+    ExtendedCustomEffectOption,
     ExtendedCustomEffectPattern,
     ScribbleBlinkMode,
     ScribbleEffect,
@@ -686,9 +688,14 @@ class LEDENETDevice:
         protocol = self.protocol
         # Devices with extended custom effects use different pattern names
         if self.supports_extended_custom_effects and pattern_code == 0x25:
-            if mode not in EXTENDED_CUSTOM_EFFECT_ID_NAME:
+            # Preset 0x25 always means a scene is active, so an unmapped mode is
+            # still a real effect -- return a distinguishable placeholder rather
+            # than None (which would be indistinguishable from "no effect").
+            name = EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
+            if name is None:
                 _LOGGER.debug("Unmapped extended custom effect mode: %s", mode)
-            return EXTENDED_CUSTOM_EFFECT_ID_NAME.get(mode)
+                return f"unknown ({mode:#04x})"
+            return name
         # 0xB6 "Colorful" (solid or multi-segment) reports preset_pattern=0x24; it is a
         # plain color, not an effect (verified on hardware), so report no effect.
         if self.supports_extended_custom_effects and pattern_code == 0x24:
@@ -1353,17 +1360,24 @@ class LEDENETDevice:
 
     def _generate_extended_custom_effect(
         self,
-        pattern_id: int,
+        pattern_id: ExtendedCustomEffectPattern | int,
         colors: list[tuple[int, int, int]],
         speed: int = 50,
         density: int = 50,
-        direction: int = 0x01,
-        option: int = 0x00,
+        direction: ExtendedCustomEffectDirection | int = 0x01,
+        option: ExtendedCustomEffectOption | int = 0x00,
     ) -> bytearray:
         """Generate the extended custom effect protocol bytes with validation.
 
         Only supported on devices using the extended protocol (e.g., 0xB6).
         """
+        # Accept the public enums (ExtendedCustomEffectPattern/Direction/Option)
+        # as well as plain ints by coercing enum members to their int value up
+        # front, before the int-literal validation below.
+        pattern_id = pattern_id.value if isinstance(pattern_id, Enum) else pattern_id
+        direction = direction.value if isinstance(direction, Enum) else direction
+        option = option.value if isinstance(option, Enum) else option
+
         # Validate pattern_id
         valid_ids = set(range(1, 23)) | {101, 102}
         if pattern_id not in valid_ids:

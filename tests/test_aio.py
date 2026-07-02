@@ -4483,6 +4483,29 @@ async def test_0xB6_scene_static_fill(mock_aio_protocol):
     assert light.effect == "Static Fill"
 
 
+@pytest.mark.asyncio
+async def test_0xB6_scene_unmapped_mode(mock_aio_protocol):
+    """An unmapped 0xB6 scene mode (preset 0x25) reports a distinguishable name.
+
+    Preset 0x25 always means a scene is active, so an unmapped mode byte must
+    not report ``None`` (indistinguishable from no effect).
+    """
+    light = AIOWifiLedBulb("192.168.1.166")
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    _transport, _protocol = await mock_aio_protocol()
+    # Same frame as the Wave scene but with an unmapped mode byte (0x50).
+    light._aio_protocol.data_received(
+        bytes.fromhex("ea810100b60923255050f0b46464ff000500500000002002010003")
+    )
+    await task
+    assert light.model_num == 0xB6
+    assert light.effect == "unknown (0x50)"
+
+
 def test_protocol_extended_custom_state_response_length():
     """ProtocolLEDENETExtendedCustom expects the 27-byte extended state."""
     proto = ProtocolLEDENETExtendedCustom()
@@ -4944,6 +4967,48 @@ async def test_generate_extended_custom_effect_param_bounds_valid(mock_aio_proto
         1, [(255, 0, 0)], speed=100, density=0, direction=0x02, option=2
     )
     assert isinstance(result, bytearray)
+
+
+@pytest.mark.asyncio
+async def test_async_set_extended_custom_effect_accepts_enums(mock_aio_protocol):
+    """async_set_extended_custom_effect accepts the public enums, not just ints."""
+    light, _t = await _setup_scribble_light(mock_aio_protocol)
+
+    sent = []
+    with patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)):
+        # Passing enum members must not raise and must send a wrapped message.
+        await light.async_set_extended_custom_effect(
+            pattern_id=ExtendedCustomEffectPattern.WAVE,
+            colors=[(255, 0, 0), (0, 255, 0)],
+            speed=50,
+            density=50,
+            direction=ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+            option=ExtendedCustomEffectOption.VARIANT_1,
+        )
+    assert len(sent) == 1
+    assert sent[0][0] == 0xB0
+    assert sent[0][1] == 0xB1
+
+    # The produced inner message must equal the equivalent all-int call.
+    # (The B0B1 wrapper carries an incrementing counter, so compare the
+    # unwrapped inner E1 21 payload.)
+    int_bytes = light._generate_extended_custom_effect(
+        ExtendedCustomEffectPattern.WAVE.value,
+        [(255, 0, 0), (0, 255, 0)],
+        50,
+        50,
+        ExtendedCustomEffectDirection.LEFT_TO_RIGHT.value,
+        ExtendedCustomEffectOption.VARIANT_1.value,
+    )
+    enum_bytes = light._generate_extended_custom_effect(
+        ExtendedCustomEffectPattern.WAVE,
+        [(255, 0, 0), (0, 255, 0)],
+        50,
+        50,
+        ExtendedCustomEffectDirection.LEFT_TO_RIGHT,
+        ExtendedCustomEffectOption.VARIANT_1,
+    )
+    assert _inner_of(enum_bytes) == _inner_of(int_bytes)
 
 
 # Tests for _generate_custom_segment_colors validation (base_device.py lines 1376-1392)
@@ -5729,6 +5794,29 @@ async def test_async_set_scribble_no_enter_mode(mock_aio_protocol):
 
 
 @pytest.mark.asyncio
+async def test_async_set_scribble_invalid_input_sends_nothing(mock_aio_protocol):
+    """Invalid scribble input raises before any send (including the E1 23 init).
+
+    An invalid call must not leave the device in scribble-init mode with nothing
+    rendered, so validation happens before the init is sent.
+    """
+    light, _transport = await _setup_scribble_light(mock_aio_protocol)
+    assert light.led_count == 80
+
+    sent = []
+    # 3 LEDs on an 80-LED device is a length mismatch -> ValueError.
+    with (
+        patch.object(light, "_async_send_msg", side_effect=lambda m: sent.append(m)),
+        pytest.raises(ValueError),
+    ):
+        await light.async_set_scribble(
+            [ScribbleLED(rgb=(255, 0, 0))] * 3, enter_mode=True
+        )
+    # Nothing must have been sent -- not even the E1 23 init.
+    assert sent == []
+
+
+@pytest.mark.asyncio
 async def test_async_set_scribble_flowing_blue_group(mock_aio_protocol):
     """FLOWING effect: blue group paint matches the captured golden."""
     light, _transport = await _setup_scribble_light(mock_aio_protocol)
@@ -6096,7 +6184,11 @@ async def test_named_effect_extended_custom_meteor(mock_aio_protocol):
 
 @pytest.mark.asyncio
 async def test_named_effect_extended_custom_unmapped_mode(mock_aio_protocol, caplog):
-    """An unmapped extended-custom mode returns None and is logged for visibility."""
+    """An unmapped extended-custom mode returns a placeholder and is logged.
+
+    Preset 0x25 always means a scene is active, so an unmapped mode reports a
+    distinguishable ``unknown (0x..)`` name rather than None.
+    """
     light = AIOWifiLedBulb("192.168.1.166")
 
     def _updated_callback(*args, **kwargs):
@@ -6136,5 +6228,5 @@ async def test_named_effect_extended_custom_unmapped_mode(mock_aio_protocol, cap
     await task
 
     with caplog.at_level(logging.DEBUG, logger="flux_led.base_device"):
-        assert light.effect is None
+        assert light.effect == "unknown (0x30)"
     assert "Unmapped extended custom effect mode" in caplog.text
