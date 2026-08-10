@@ -1279,6 +1279,14 @@ class LEDENETDevice:
             # Extended state format (0xEA 0x81): model at byte 4, version at byte 5.
             self._model_num = full_msg[4]
             version_num = full_msg[5]
+            # A device that answers with the extended format cannot be driven by
+            # the 8-byte protocol: ProtocolLEDENET8Byte reports these responses as
+            # valid but never implements extended_state_to_state, so the abstract
+            # stub returns None and unpacking it raises TypeError. Probing hands us
+            # the probe protocol as the fallback, which is only used for model
+            # numbers missing from models_db, so point unknown models at a protocol
+            # that can actually parse what the device just sent.
+            fallback_protocol = PROTOCOL_LEDENET_EXTENDED_CUSTOM
         else:
             # Standard state format (0x81): model at byte 1, version at byte 10.
             self._model_num = full_msg[1]

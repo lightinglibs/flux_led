@@ -4245,6 +4245,35 @@ async def test_extended_state_color_parsing(
 
 
 @pytest.mark.asyncio
+async def test_setup_unknown_model_that_only_speaks_extended_state(mock_aio_protocol):
+    """An unknown model_num answering only 0xEA 0x81 must still set up.
+
+    Captured from a Surplife AK001-ZJ21413 reporting model_num 0x77, which never
+    sends the 14-byte state response. Probing hands the 8-byte protocol in as the
+    fallback for unknown models, but ProtocolLEDENET8Byte reports extended
+    responses as valid while inheriting the abstract extended_state_to_state, so
+    unpacking its None result raised TypeError inside data_received.
+    """
+    light = AIOWifiLedBulb("192.168.1.166", timeout=0.01)
+
+    def _updated_callback(*args, **kwargs):
+        pass
+
+    task = asyncio.create_task(light.async_setup(_updated_callback))
+    await mock_aio_protocol()
+    light._aio_protocol.data_received(
+        b"\xea\x81\x01\x00\x77\x09\x23\x25\x03\x50\xf0\x0b\xe4\x64"
+        b"\x00\x00\x01\x00\x64\x00\x00\x00\x80\x03\x00\x00\x00"
+    )
+    await task
+
+    assert light.available
+    assert light.model_num == 0x77
+    assert light.protocol == PROTOCOL_LEDENET_EXTENDED_CUSTOM
+    assert light.is_on is True
+
+
+@pytest.mark.asyncio
 async def test_setup_0x35_with_version_num_10(
     mock_aio_protocol, caplog: pytest.LogCaptureFixture
 ):
